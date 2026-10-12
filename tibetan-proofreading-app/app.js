@@ -2575,7 +2575,6 @@ function restoreCachedResults() {
         source: result.source || "cache",
         updatedAt: result.updatedAt || payload.updatedAt || "",
       });
-      seedChatGptDialogOpenAiReview(pageNum, state.ocrResults.get(pageNum));
     }
     // Ignore unusable extracted text without deleting saved model results.
 
@@ -3793,7 +3792,6 @@ function saveOcrResultFromParsed(parsed, source, statusMessage, fallbackLines = 
     source,
     updatedAt: recognizedAt,
   });
-  seedChatGptDialogOpenAiReview(state.pageNum, state.ocrResults.get(state.pageNum));
   saveCachedResults();
   els.ocrText.value = text;
   setOcrView(preferredView === "proofread" ? "proofread" : preferredView === "compare" && compare ? "compare" : "lines");
@@ -3948,29 +3946,6 @@ function normalizeOcrCompare(compare) {
     qwenReviews: Array.isArray(compare.qwenReviews) ? compare.qwenReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string") : [],
     sharedErrors: normalizeSharedErrorMarks(compare.sharedErrors || compare.commonErrors || compare.sharedErrorMarks),
   };
-}
-
-const CHATGPT_DIALOG_OPENAI_REVIEW = {
-  index: 2,
-  text: "སྤྲུལ་སྐུ་ཉིད་ཀྱིས་མཛད།",
-  model: "ChatGPT 对话复核",
-  provider: "openai",
-  note: "其中 ཉིད 暂作疑字，仍需人工确认。",
-};
-
-function seedChatGptDialogOpenAiReview(pageNum, result) {
-  if (pageNum !== 1 || !/2②⅝⑦5⑦=3=51\.pdf/.test(String(state.sourceName || ""))) return false;
-  const compare = result?.compare;
-  if (!compare || !Array.isArray(compare.openaiReviews)) return false;
-  if (compare.openaiReviews.some((review) => review.index === CHATGPT_DIALOG_OPENAI_REVIEW.index)) return false;
-  const sourceLine = compare.bdrc?.lines?.[CHATGPT_DIALOG_OPENAI_REVIEW.index]
-    || compare.llm?.lines?.[CHATGPT_DIALOG_OPENAI_REVIEW.index];
-  compare.openaiReviews.push({
-    ...CHATGPT_DIALOG_OPENAI_REVIEW,
-    bbox: normalizeBbox(sourceLine?.bbox),
-    reviewedAt: new Date().toISOString(),
-  });
-  return true;
 }
 
 function normalizeSharedErrorMarks(marks) {
