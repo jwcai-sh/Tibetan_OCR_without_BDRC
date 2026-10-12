@@ -240,7 +240,7 @@ button {
 
 .home-cloud-library {
   max-width: 1120px;
-  margin: 18px auto 0;
+  margin: 0 auto 18px;
   overflow: hidden;
   border: 1px solid #d6dce2;
   border-radius: 12px;
