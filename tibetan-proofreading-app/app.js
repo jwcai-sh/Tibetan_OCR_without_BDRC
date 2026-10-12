@@ -3942,7 +3942,7 @@ function normalizeOcrCompare(compare) {
     note: String(compare.note || ""),
     bdrc,
     llm,
-    openaiReviews: Array.isArray(compare.openaiReviews) ? compare.openaiReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string") : [],
+    openaiReviews: Array.isArray(compare.openaiReviews) ? compare.openaiReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string" && review?.model !== "ChatGPT 对话复核") : [],
     qwenReviews: Array.isArray(compare.qwenReviews) ? compare.qwenReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string") : [],
     sharedErrors: normalizeSharedErrorMarks(compare.sharedErrors || compare.commonErrors || compare.sharedErrorMarks),
   };

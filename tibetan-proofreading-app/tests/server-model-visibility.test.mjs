@@ -41,3 +41,16 @@ test('server display hides BDRC and old Gemini without changing saved candidates
     oldOptions:['qwen'], newGemini:'new Gemini', newOptions:['llm','qwen'],
   });
 });
+
+test('restoring cached comparisons drops only the automatically seeded OpenAI sample', () => {
+  const ctx = context();
+  const reviews = vm.runInContext(`normalizeOcrCompare({
+    bdrc:{text:'',lines:[]}, llm:{text:'',lines:[]},
+    qwenReviews:[{index:0,text:'saved Qwen'}],
+    openaiReviews:[
+      {index:2,text:'old sample',model:'ChatGPT 对话复核'},
+      {index:1,text:'real review',model:'gpt-5'},
+    ],
+  }).openaiReviews.map(({index,model})=>({index,model}))`, ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(reviews)), [{index:1,model:'gpt-5'}]);
+});
