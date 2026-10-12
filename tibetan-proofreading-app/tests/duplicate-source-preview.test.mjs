@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
+const styles=fs.readFileSync(new URL('../styles.css',import.meta.url),'utf8');
+const helper=source.slice(source.indexOf('function mergeDuplicateSourcePreviews('),source.indexOf('function createSourceBlockPreviewCanvas('));
+const make=(index,key)=>{const classes=new Set();const card={classes,classList:{toggle(name,enabled){enabled?classes.add(name):classes.delete(name);}}};return {dataset:{blockIndex:String(index),physicalRowKey:key,previewHeight:'160px'},style:{},strip:{style:{}},note:null,card,
+ closest(){return this.card;},querySelector(selector){return selector==='[data-crop-strip]'?this.strip:this.note;},appendChild(node){this.note=node;}};};
+const a=make(2,'row-0'),b=make(3,'row-0'),c=make(4,'row-1'),d=make(5,'row-1'),e=make(6,'row-0');
+const ctx=vm.createContext({document:{createElement:()=>({dataset:{}})}});vm.runInContext(helper,ctx);
+const root={querySelectorAll:()=>[b,d,c,e,a]};ctx.mergeDuplicateSourcePreviews(root);
+assert.equal(a.strip.style.display,'flex');assert.equal(c.strip.style.display,'flex');
+for (const duplicate of [b,d,e]) assert.equal(duplicate.card.classes.has('is-duplicate-source'),true);
+assert.match(b.note.textContent,/识别结果已在 block 03 显示/);assert.match(d.note.textContent,/识别结果已在 block 05 显示/);assert.match(e.note.textContent,/识别结果已在 block 03 显示/);
+ctx.mergeDuplicateSourcePreviews({querySelectorAll:()=>[b,e,c,d]});
+assert.equal(b.card.classes.has('is-duplicate-source'),false);assert.equal(c.card.classes.has('is-duplicate-source'),false);
+assert.equal(e.card.classes.has('is-duplicate-source'),true);assert.equal(d.card.classes.has('is-duplicate-source'),true);
+assert.equal(b.strip.style.display,'flex');assert.equal(b.note.hidden,true);
+assert.match(styles,/\.workspace\.proofread-merged-view \.proofread-block-card\.is-duplicate-source\s*\{[^}]*display:\s*none\s*!important/,'every duplicate source card must be removed from the merged view, including its repeated preview and notice');
+console.log('Duplicate source previews share the earliest available block without deleting OCR records.');

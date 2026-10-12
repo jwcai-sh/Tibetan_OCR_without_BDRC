@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>藏文典籍翻译工作台</title>
+    <link rel="stylesheet" href="./styles.css?v=20261012-gemini-shared-toolbar" />
+    <script src="./vendor/pdf.min.js" defer></script>
+    <script src="./vendor/lucide.min.js" defer></script>
+    <script src="./app.js?v=20261012-server-ai-gemini-shared-toolbar" defer></script>
+  </head>
+  <body>
+    <main class="app-shell ocr-only-mode ai-only-mode">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">藏</span>
+          <div>
+            <h1>藏文典籍翻译工作台</h1>
+          </div>
+        </div>
+        <div class="project-actions" aria-label="项目操作">
+          <button id="homeButton" class="ghost-button compact workbench-only-action" type="button">
+            <i data-lucide="layout-dashboard"></i>
+            <span>主页</span>
+          </button>
+          <button id="newProjectButton" class="ghost-button compact workbench-only-action" type="button">
+            <i data-lucide="file-plus-2"></i>
+            <span>新建项目</span>
+          </button>
+          <button id="deleteProjectButton" class="ghost-button compact danger-action workbench-only-action" type="button">
+            <i data-lucide="trash-2"></i>
+            <span>删除项目</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="control-band hidden-config-band" aria-label="OCR 和分页控制" hidden>
+        <div class="control-group wide">
+          <label for="endpointInput">BDRC OCR 接口</label>
+          <input id="endpointInput" type="url" value="http://127.0.0.1:18090/ocr" spellcheck="false" />
+        </div>
+        <div class="control-group wide">
+          <label for="aiOcrEndpointInput">Gemini Vision OCR 接口</label>
+          <input id="aiOcrEndpointInput" type="url" value="http://127.0.0.1:18092/ocr" spellcheck="false" />
+        </div>
+        <div class="control-group wide translation-feature">
+          <label for="translateEndpointInput">藏译汉接口</label>
+          <input id="translateEndpointInput" type="url" value="http://127.0.0.1:18091/translate" spellcheck="false" />
+        </div>
+        <div class="control-group">
+          <label for="dpiInput">OCR 图片 DPI</label>
+          <select id="dpiInput">
+            <option value="200">200</option>
+            <option value="260" selected>260</option>
+            <option value="300">300</option>
+            <option value="360">360</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="pageInput">页码</label>
+          <div class="stepper">
+            <button id="prevButton" class="icon-button" type="button" aria-label="上一页">
+              <i data-lucide="chevron-left"></i>
+            </button>
+            <input id="pageInput" type="number" min="1" value="1" />
+            <span id="pageTotal">/ 0</span>
+            <button id="nextButton" class="icon-button" type="button" aria-label="下一页">
+              <i data-lucide="chevron-right"></i>
+            </button>
+          </div>
+        </div>
+        <div class="control-group">
+          <label for="zoomInput">显示比例</label>
+          <select id="zoomInput">
+            <option value="fit" selected>适应宽度</option>
+            <option value="1">100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+        </div>
+      </section>
+
+      <section id="statusBar" class="status-bar is-hidden" role="status" hidden></section>
+
+      <section id="homeView" class="home-view" aria-label="工作台主页">
+        <div class="home-hero">
+          <div>
+            <span class="eyebrow">Workspace</span>
+            <h2>选择今天要处理的任务</h2>
+          </div>
+          <p>从这里进入藏文 OCR 校对，或进入藏译中任务。项目记录保存在本机浏览器缓存中，重新加载源文件后可继续校对。</p>
+        </div>
+
+        <div class="home-entry-grid">
+          <article class="home-entry-card" data-workflow-card="ocr">
+            <div class="home-entry-icon">
+              <i data-lucide="scan-text"></i>
+            </div>
+            <div class="home-entry-body">
+              <span class="eyebrow">OCR Proofreading</span>
+              <h3>藏文 OCR 识别和校对</h3>
+              <p>分页面查看原文，使用 Gemini Vision 识别，并逐 block 标错、复核及保存最终 OCR 文本。</p>
+            </div>
+            <div class="home-entry-actions">
+              <button id="homeNewOcrProjectButton" class="primary-button compact" type="button">
+                <i data-lucide="file-plus-2"></i>
+                <span>新建 OCR 项目</span>
+              </button>
+              <button id="homeNewOcrFolderProjectButton" class="ghost-button compact" type="button">
+                <i data-lucide="folder-plus"></i>
+                <span>导入分册文件夹</span>
+              </button>
+              <button id="homeBrowseOcrProjectsButton" class="ghost-button compact" type="button">
+                <i data-lucide="folder-open"></i>
+                <span>浏览项目</span>
+              </button>
+              <button id="homeContinueOcrTaskButton" class="ghost-button compact" type="button">
+                <i data-lucide="play"></i>
+                <span>继续校对</span>
+              </button>
+            </div>
+            <div class="home-entry-stats" id="homeOcrStats">暂无项目</div>
+          </article>
+
+          <article class="home-entry-card" data-workflow-card="translation">
+            <div class="home-entry-icon is-translation">
+              <i data-lucide="languages"></i>
+            </div>
+            <div class="home-entry-body">
+              <span class="eyebrow">Translation</span>
+              <h3>藏译中</h3>
+              <p>加载藏文原文或 OCR 校对结果，按页生成中文译文，保留人工修改、复制和导出入口。</p>
+            </div>
+            <div class="home-entry-actions">
+              <button id="homeNewTranslationProjectButton" class="primary-button compact" type="button">
+                <i data-lucide="file-plus-2"></i>
+                <span>新建翻译项目</span>
+              </button>
+              <button id="homeBrowseTranslationProjectsButton" class="ghost-button compact" type="button">
+                <i data-lucide="folder-open"></i>
+                <span>浏览项目</span>
+              </button>
+              <button id="homeContinueTranslationTaskButton" class="ghost-button compact" type="button">
+                <i data-lucide="play"></i>
+                <span>继续翻译</span>
+              </button>
+            </div>
+            <div class="home-entry-stats" id="homeTranslationStats">暂无项目</div>
+          </article>
+        </div>
+
+        <section class="home-projects" aria-label="当前项目">
+          <div class="home-section-header">
+            <div>
+              <span class="eyebrow">Local Projects</span>
+              <h3>当前项目</h3>
+            </div>
+            <button id="homeRefreshProjectsButton" class="ghost-button compact" type="button">
+              <i data-lucide="refresh-cw"></i>
+              <span>刷新</span>
+            </button>
+          </div>
+          <div id="homeProjectList" class="home-project-list"></div>
+        </section>
+      </section>
+
+      <section id="workbenchView" class="workspace ocr-only-mode" aria-label="原文与 OCR 对照区" hidden>
+        <section class="viewer-pane" aria-label="原文单页显示">
+          <div class="pane-header viewer-pane-header">
+            <div class="viewer-title-block">
+              <span class="eyebrow">原文单页</span>
+              <h2 id="sourceTitle">未载入文件</h2>
+              <button id="fileLoadButton" class="file-button compact viewer-file-button" type="button">
+                <i data-lucide="upload"></i>
+                <span>加载文件</span>
+              </button>
+              <input
+                id="fileInput"
+                type="file"
+                accept=".pdf,.docx,.md,.markdown,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain,image/*"
+              />
+              <input
+                id="folderInput"
+                type="file"
+                accept=".pdf,application/pdf"
+                webkitdirectory
+                directory
+                multiple
+              />
+            </div>
+            <div class="viewer-header-actions">
+              <div class="viewer-page-stepper" aria-label="页面导航">
+                <button id="viewerFirstPageButton" class="icon-button compact page-jump-button" type="button" aria-label="第一页" title="第一页">
+                  <i data-lucide="skip-back"></i>
+                </button>
+                <button id="viewerPrevPageButton" class="icon-button compact page-jump-button" type="button" aria-label="上一页" title="上一页">
+                  <i data-lucide="chevron-left"></i>
+                </button>
+                <input id="viewerPageInput" class="viewer-page-input" type="number" min="1" value="1" aria-label="当前页码" />
+                <span id="renderMeta" class="viewer-page-total">/ 0</span>
+                <button id="viewerNextPageButton" class="icon-button compact page-jump-button" type="button" aria-label="下一页" title="下一页">
+                  <i data-lucide="chevron-right"></i>
+                </button>
+                <button id="viewerLastPageButton" class="icon-button compact page-jump-button" type="button" aria-label="最后一页" title="最后一页">
+                  <i data-lucide="skip-forward"></i>
+                </button>
+              </div>
+              <div class="viewer-page-stepper" aria-label="原文缩放">
+                <button id="viewerZoomOutButton" class="icon-button compact" type="button" aria-label="缩小原文" title="缩小原文">
+                  <i data-lucide="zoom-out"></i>
+                </button>
+                <span id="viewerZoomLabel" class="viewer-page-total">100%</span>
+                <button id="viewerZoomInButton" class="icon-button compact" type="button" aria-label="放大原文" title="放大原文">
+                  <i data-lucide="zoom-in"></i>
+                </button>
+              </div>
+              <div id="thumbnailList" hidden></div>
+            </div>
+            <button class="pane-collapse-button" type="button" data-collapse-pane="viewer" aria-label="折叠原文栏" title="折叠原文栏">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+          </div>
+          <div id="pageViewport" class="page-viewport">
+            <canvas id="pdfCanvas"></canvas>
+            <img id="imagePage" alt="上传图片原文" />
+            <div id="sourceBlockOverlay" class="source-block-overlay" aria-hidden="true"></div>
+            <div id="sourceLineHighlight" class="source-line-highlight" aria-hidden="true"></div>
+            <div id="emptyState" class="empty-state">
+              <i data-lucide="file-search"></i>
+              <p>上传藏文 PDF 后，这里显示当前单页原文。</p>
+            </div>
+          </div>
+        </section>
+
+        <div class="viewer-ocr-divider">
+          <div class="pane-resizer viewer-ocr-resizer" data-resizer="viewer-ocr" aria-hidden="true"></div>
+          <button class="pane-collapse-button pane-resizer-toggle viewer-ocr-divider-toggle" type="button" data-collapse-pane="viewer" aria-label="折叠原文栏" title="折叠原文栏">
+            <i data-lucide="panel-left-close"></i>
+          </button>
+        </div>
+
+        <section class="ocr-pane" aria-label="Gemini Vision OCR 结果">
+          <div class="pane-header">
+            <div>
+              <span id="ocrPaneEyebrow" class="eyebrow">Gemini Vision OCR 结果</span>
+              <h2 id="ocrTitle">等待识别</h2>
+            </div>
+            <div id="ocrMeta" class="meta-pill">未识别</div>
+          </div>
+
+          <div class="ocr-toolbar">
+            <div class="ocr-toolbar-row ocr-toolbar-primary">
+            <label class="ocr-profile-control resource-profile-control" for="ocrProfileSelect">
+              <span>类型</span>
+              <select id="ocrProfileSelect" aria-label="藏文资料类型">
+                <option value="handwritten">手写体</option>
+                <option value="traditional" selected>传统经书印刷版式</option>
+                <option value="modern">现代印刷版式</option>
+              </select>
+            </label>
+            <div class="viewer-page-stepper ocr-page-navigation" aria-label="OCR 结果页面导航">
+              <button id="ocrFirstPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏第一页" title="第一页"><i data-lucide="skip-back"></i></button>
+              <button id="ocrPrevPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏上一页" title="上一页"><i data-lucide="chevron-left"></i></button>
+              <input id="ocrPageInput" class="viewer-page-input" type="number" min="1" value="1" aria-label="右栏当前页码" />
+              <span id="ocrPageTotal" class="viewer-page-total">/ 0</span>
+              <button id="ocrNextPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏下一页" title="下一页"><i data-lucide="chevron-right"></i></button>
+              <button id="ocrLastPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏最后一页" title="最后一页"><i data-lucide="skip-forward"></i></button>
+            </div>
+            <div class="gemini-model-actions" role="group" aria-label="Gemini 识别和整页复核">
+              <button id="ocrButton" class="primary-button compact" type="button">
+                <i data-lucide="scan-text"></i>
+                <span>识别</span>
+              </button>
+              <button id="geminiPageReviewButton" class="ghost-button compact" type="button" title="读取完整原页并复核本页中间栏；裁剪预览供人工对照。">
+                <i data-lucide="scan-search"></i>
+                <span>整页复核</span>
+              </button>
+              <label class="ocr-profile-control gemini-model-control" for="geminiModelSelect">
+                <span>Gemini</span>
+                <select id="geminiModelSelect" aria-label="Gemini OCR 与整页复核模型"></select>
+              </label>
+            </div>
+            <label class="ocr-profile-control ocr-engine-control" for="ocrModeSelect">
+              <span>引擎</span>
+              <select id="ocrModeSelect" aria-label="OCR 识别引擎">
+                <option value="ai" selected>Gemini Vision</option>
+              </select>
+            </label>
+            <button id="batchOcrButton" class="ghost-button compact" type="button" disabled>批量识别剩余页</button>
+            <button id="cancelBatchOcrButton" class="ghost-button compact" type="button" hidden>停止批量</button>
+            </div>
+            <div class="ocr-toolbar-row ocr-toolbar-secondary">
+            <button id="copyButton" class="ghost-button compact quiet-action" type="button" aria-label="复制 OCR 文本" title="复制 OCR 文本">
+              <i data-lucide="copy"></i>
+              <span>复制</span>
+            </button>
+            <button id="downloadTextButton" class="ghost-button compact" type="button" aria-label="下载所有页各模型 OCR 结果 Markdown" title="下载所有页各模型 OCR 结果、字数和错误统计 Markdown">
+              <i data-lucide="file-down"></i>
+              <span>Markdown</span>
+            </button>
+            <div id="ocrViewSwitch" class="view-switch" role="group" aria-label="OCR 结果显示方式">
+              <button id="proofreadViewButton" class="view-switch-button" type="button">校对</button>
+              <button id="compareViewButton" class="view-switch-button" type="button">对照</button>
+              <button id="lineViewButton" class="view-switch-button active" type="button">逐行</button>
+              <button id="textViewButton" class="view-switch-button" type="button">文本</button>
+            </div>
+            <div class="font-size-controls" role="group" aria-label="右栏识别文字大小">
+              <button
+                id="decreaseOcrFontButton"
+                class="icon-button compact font-size-button"
+                type="button"
+                aria-label="缩小右栏识别文字"
+                title="缩小右栏识别文字"
+              >
+                <span class="font-size-glyph" aria-hidden="true">A<sup>−</sup></span>
+              </button>
+              <button
+                id="increaseOcrFontButton"
+                class="icon-button compact font-size-button"
+                type="button"
+                aria-label="放大右栏识别文字"
+                title="放大右栏识别文字"
+              >
+                <span class="font-size-glyph" aria-hidden="true">A<sup>+</sup></span>
+              </button>
+            </div>
+            <div id="batchOcrProgress" class="review-feedback" role="status" aria-live="polite"></div>
+            <button class="pane-collapse-button" type="button" data-collapse-pane="ocr" aria-label="折叠 OCR 栏" title="折叠 OCR 栏">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+            </div>
+          </div>
+
+          <div id="ocrLineCompare" class="ocr-line-compare" aria-label="Gemini Vision OCR 逐行校对"></div>
+
+          <textarea
+            id="ocrText"
+            class="is-hidden"
+            spellcheck="false"
+            placeholder="可编辑 PDF/Word 会优先显示直接提取的文本；扫描件可点击“识别”调用 OCR，也可以直接粘贴外部结果校对。"
+          ></textarea>
+
+          <div class="result-summary">
+            <div>
+              <span class="summary-label">当前页字数</span>
+              <strong id="charCount">0</strong>
+            </div>
+            <div>
+              <span class="summary-label">已提取/识别页</span>
+              <strong id="recognizedCount">0</strong>
+            </div>
+          </div>
+        </section>
+
+        <div class="pane-resizer" data-resizer="ocr-ai" aria-hidden="true"></div>
+
+        <section class="ai-ocr-pane" aria-label="Gemini Vision OCR 结果">
+          <div class="pane-header">
+            <div>
+              <span class="eyebrow">Gemini Vision OCR 结果</span>
+              <h2 id="aiOcrTitle">等待智能识别</h2>
+            </div>
+            <div id="aiOcrMeta" class="meta-pill">未返回</div>
+            <button class="pane-collapse-button" type="button" data-collapse-pane="ai" aria-label="折叠 Gemini Vision 栏" title="折叠 Gemini Vision 栏">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+          </div>
+
+          <div class="ocr-toolbar">
+            <button id="copyAiButton" class="ghost-button compact quiet-action" type="button" aria-label="复制 Gemini Vision OCR 文本" title="复制 Gemini Vision OCR 文本">
+              <i data-lucide="copy"></i>
+              <span>复制</span>
+            </button>
+            <button id="downloadAiTextButton" class="ghost-button compact quiet-action" type="button" aria-label="导出全部 Gemini Vision OCR 文本" title="导出全部 Gemini Vision OCR 文本">
+              <i data-lucide="download"></i>
+              <span>导出全部</span>
+            </button>
+          </div>
+
+          <div id="aiOcrLineCompare" class="ocr-line-compare ai-ocr-line-compare" aria-label="Gemini Vision OCR 逐行结果"></div>
+
+          <div class="result-summary">
+            <div>
+              <span class="summary-label">当前页字数</span>
+              <strong id="aiCharCount">0</strong>
+            </div>
+            <div>
+              <span class="summary-label">AI 返回行数</span>
+              <strong id="aiLineCount">0</strong>
+            </div>
+          </div>
+        </section>
+
+        <div class="pane-resizer pane-resizer-toggle translation-feature" data-resizer="ai-translation">
+          <button
+            id="toggleTranslationPaneButton"
+            class="translation-toggle"
+            type="button"
+            aria-label="展开藏译汉结果栏"
+            aria-expanded="false"
+          >
+            <i data-lucide="panel-right-open"></i>
+            <span>译</span>
+          </button>
+        </div>
+
+        <section class="translation-pane translation-feature" aria-label="藏译汉结果">
+          <div class="pane-header">
+            <div>
+              <span class="eyebrow">藏译汉结果</span>
+              <h2 id="translationTitle">等待翻译</h2>
+            </div>
+            <div id="translationMeta" class="meta-pill">未翻译</div>
+          </div>
+
+          <div class="translation-role-toolbar">
+            <label for="translationRoleSelect">角色</label>
+            <select id="translationRoleSelect" aria-label="翻译角色"></select>
+            <button id="manageRolesButton" class="ghost-button compact quiet-action" type="button" aria-label="角色管理" title="角色管理">
+              <i data-lucide="settings-2"></i>
+              <span>角色管理</span>
+            </button>
+            <span id="translationRoleModel" class="meta-pill role-model-pill">模型：默认</span>
+          </div>
+
+          <div class="ocr-toolbar">
+            <button id="translateButton" class="primary-button compact" type="button">
+              <i data-lucide="languages"></i>
+              <span>翻译</span>
+            </button>
+            <button id="checkTranslateButton" class="ghost-button compact quiet-action" type="button" aria-label="检查翻译服务" title="检查翻译服务">
+              <i data-lucide="plug-zap"></i>
+              <span>检查翻译</span>
+            </button>
+            <button id="copyTranslationButton" class="ghost-button compact quiet-action" type="button" aria-label="复制译文" title="复制译文">
+              <i data-lucide="copy"></i>
+              <span>复制</span>
+            </button>
+            <button id="clearTranslationButton" class="ghost-button compact quiet-action" type="button" aria-label="清空本页译文" title="清空本页译文">
+              <i data-lucide="eraser"></i>
+              <span>清空本页</span>
+            </button>
+            <button id="downloadTranslationButton" class="ghost-button compact quiet-action" type="button" aria-label="导出全部译文" title="导出全部译文">
+              <i data-lucide="download"></i>
+              <span>导出全部</span>
+            </button>
+          </div>
+
+          <textarea
+            id="translationText"
+            spellcheck="false"
+            placeholder="点击“翻译”后，会优先使用 PDF/Word 文本层；没有可提取文本时再使用 OCR 或人工校对文本。"
+          ></textarea>
+
+          <div class="result-summary">
+            <div>
+              <span class="summary-label">当前页中文字数</span>
+              <strong id="translationCharCount">0</strong>
+            </div>
+            <div>
+              <span class="summary-label">已翻译页</span>
+              <strong id="translatedCount">0</strong>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="roleManagerModal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="roleManagerTitle">
+      <section class="role-modal">
+        <header class="role-modal-header">
+          <div>
+            <span class="eyebrow">Prompt Role</span>
+            <h2 id="roleManagerTitle">翻译角色管理</h2>
+          </div>
+          <button id="closeRoleManagerButton" class="icon-button compact" type="button" aria-label="关闭角色管理">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="role-modal-body">
+          <aside class="role-list-panel">
+            <button id="newRoleButton" class="ghost-button compact full-width" type="button">
+              <i data-lucide="plus"></i>
+              <span>新建角色</span>
+            </button>
+            <div id="roleList" class="role-list" aria-label="翻译角色列表"></div>
+          </aside>
+
+          <form id="roleForm" class="role-form">
+            <div class="form-grid">
+              <label>
+                显示名称
+                <input id="roleNameInput" type="text" placeholder="例：学术直译" />
+              </label>
+              <label>
+                标识符
+                <input id="roleIdInput" type="text" placeholder="保存时自动生成" />
+              </label>
+              <label>
+                源语言
+                <select id="roleSourceLangInput">
+                  <option value="bo">藏文</option>
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                  <option value="sa">Sanskrit</option>
+                </select>
+              </label>
+              <label>
+                目标语言
+                <select id="roleTargetLangInput">
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                  <option value="bo">藏文</option>
+                  <option value="sa">Sanskrit</option>
+                </select>
+              </label>
+              <label class="wide-field">
+                模型
+                <input id="roleModelInput" type="text" placeholder="local:qwen3.6-27b:latest" />
+              </label>
+              <label>
+                temperature
+                <input id="roleTemperatureInput" type="number" min="0" max="2" step="0.1" />
+              </label>
+              <label>
+                max_tokens
+                <input id="roleMaxTokensInput" type="number" min="256" max="16000" step="256" />
+              </label>
+            </div>
+
+            <label class="prompt-field">
+              译笔总旨 / system prompt
+              <textarea id="roleSystemPromptInput" spellcheck="false"></textarea>
+            </label>
+            <label class="prompt-field">
+              用户提示词模板 / user prompt template
+              <textarea id="roleUserPromptTemplateInput" spellcheck="false"></textarea>
+              <span class="field-hint">可用变量：{source_text}、{source_lang}、{target_lang}、{page}、{source_name}</span>
+            </label>
+
+            <footer class="role-modal-actions">
+              <button id="deleteRoleButton" class="ghost-button compact" type="button">删除自定义角色</button>
+              <button id="resetRolesButton" class="ghost-button compact" type="button">重置自定义角色</button>
+              <button id="saveRoleButton" class="primary-button compact" type="submit">保存角色</button>
+            </footer>
+          </form>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import assert from "node:assert/strict";
+const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+const fn = app.slice(app.indexOf("async function fetchOcrWithTransientRetry("), app.indexOf("function getExistingResultLines("));
+const waits = [];
+let responses = [], calls = 0;
+const context = vm.createContext({fetch: async () => { calls++; return {status: responses.shift()}; },
+  window: {setTimeout: (resolve, delay) => {waits.push(delay); resolve();}}, Error});
+vm.runInContext(fn, context);
+responses = [503, 503, 200];
+assert.equal((await context.fetchOcrWithTransientRetry('/line-review', {}, true)).status, 200);
+assert.equal(calls, 3);
+assert.equal(waits.length, 2);
+responses = [503, 503, 503, 503]; calls = 0;
+assert.equal((await context.fetchOcrWithTransientRetry('/line-review', {}, true)).status, 503);
+assert.equal(calls, 4);
+responses = [500]; calls = 0;
+assert.equal((await context.fetchOcrWithTransientRetry('/line-review', {}, true)).status, 500);
+assert.equal(calls, 1);
+responses = [503]; calls = 0;
+await context.fetchOcrWithTransientRetry('/ocr', {}, false);
+assert.equal(calls, 1);
+console.log('Temporary upstream errors retry within limits; configuration errors and BDRC do not retry.');

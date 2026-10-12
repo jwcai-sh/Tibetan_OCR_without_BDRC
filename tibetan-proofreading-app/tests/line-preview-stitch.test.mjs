@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+const draws=[];
+const ctx=vm.createContext({Image:class{set src(v){this.url=v;this.onload();}},document:{createElement:()=>({getContext:()=>({drawImage:(...args)=>draws.push(args)}),toDataURL:()=> 'joined'})}});
+vm.runInContext(app.slice(app.indexOf('function linePreviewTileSlices('),app.indexOf('function createModelInputPreview(')),ctx);
+const payload={images:['a','b','c'],review_image:{review_size:{width:2904,height:200},tile_ranges:[[0,1000],[952,1952],[1904,2904]]}};
+ctx.payload=payload;
+assert.deepEqual(Array.from(await vm.runInContext('composeLinePreviewImages(payload)',ctx)),['joined']);
+assert.deepEqual(draws.map(d=>d.slice(1)),[[0,0,1000,200,0,0,1000,200],[48,0,952,200,1000,0,952,200],[48,0,952,200,1952,0,952,200]]);
+assert.equal(draws.reduce((n,d)=>n+d[3],0),2904);
+assert.deepEqual(payload.images,['a','b','c'],'Model inputs must remain unchanged');
+console.log('Preview reconstructs overlapping tiles once at original pixel coordinates');

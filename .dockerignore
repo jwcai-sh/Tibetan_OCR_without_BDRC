@@ -1,0 +1,11 @@
+\.git/
+**/__pycache__/
+**/*.py[cod]
+**/tests/
+.env
+.env.*
+**/.env
+**/.env.*
+.qwen-review.env
+**/.qwen-review.env
+*.log

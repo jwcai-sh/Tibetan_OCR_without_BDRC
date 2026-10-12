@@ -1,0 +1,11 @@
+.env
+.env.*
+**/.env
+**/.env.*
+.qwen-review.env
+**/.qwen-review.env
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
