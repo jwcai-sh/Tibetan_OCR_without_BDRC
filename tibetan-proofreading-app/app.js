@@ -5185,7 +5185,7 @@ function renderCurrentOcrView() {
 function renderOcrSourceCompareOnly() {
   els.ocrLineCompare.innerHTML = "";
   els.ocrLineCompare.classList.remove("proofread-block-list");
-  const compare = getCurrentOcrCompareOrEmpty();
+  const compare = getVisibleServerCompare(getCurrentOcrCompareOrEmpty());
   const { side, peer, key } = getPrimaryOcrDisplay(compare);
   renderOcrSourceSide(els.ocrLineCompare, side, peer, key, compare);
   renderAiOcrPanelForPage(compare);
@@ -5200,7 +5200,7 @@ function renderOcrLineComparison() {
   }
 
   const result = state.ocrResults.get(state.pageNum);
-  const sourceCompare = getOcrSourceCompare(result);
+  const sourceCompare = getVisibleServerCompare(getOcrSourceCompare(result));
   if (sourceCompare) {
     const { side, peer, key } = getPrimaryOcrDisplay(sourceCompare);
     renderOcrSourceSide(els.ocrLineCompare, side, peer, key, sourceCompare);
@@ -5283,7 +5283,7 @@ function renderOcrLineComparison() {
 
 function renderAiOcrPanelForPage(compare = null) {
   if (!els.aiOcrLineCompare) return;
-  const sourceCompare = getAiOnlyDisplayCompare(compare || getCurrentOcrCompareOrEmpty());
+  const sourceCompare = getVisibleServerCompare(getAiOnlyDisplayCompare(compare || getCurrentOcrCompareOrEmpty()));
   renderOcrSourceSide(els.aiOcrLineCompare, sourceCompare.llm, sourceCompare.bdrc, "llm", sourceCompare);
   updateAiOcrPanelMeta(sourceCompare);
 }
@@ -5467,6 +5467,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
     return card;
   }
 
+  const showGemini = isCurrentGeminiResult(compare?.llm);
   const savedSide = getProofreadDefaultChoice(finalLine, bdrcLine, aiLine);
 
   const options = document.createElement("div");
@@ -5476,6 +5477,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
     savedSide,
     aiLine.provider === "qwen" ? "千问候选" : aiLine.provider === "openai" ? "OpenAI 候选" : "Gemini Vision",
     compare,
+    showGemini,
   );
   const autoSaveStatus = document.createElement("span");
   autoSaveStatus.className = "proofread-autosave-status";
@@ -5494,19 +5496,11 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
 
   const stack = document.createElement("div");
   stack.className = "proofread-editor-stack";
-  stack.append(
-    renderProofreadEditorGroup({
-      index,
-      side: "bdrc",
-      label: "BDRC 识别",
-      line: bdrcLine,
-      peerLine: aiLine,
-      compare,
-    }),
+  if (showGemini) stack.append(
     renderProofreadEditorGroup({
       index,
       side: "llm",
-      label: aiLine.provider === "qwen" ? "千问复核候选" : aiLine.provider === "openai" ? "OpenAI 复核候选" : "Gemini Vision 识别",
+      label: "Gemini Vision 识别",
       line: aiLine,
       peerLine: bdrcLine,
       compare,
@@ -5565,7 +5559,7 @@ function makeProofreadAiLine(compare, rawAiLine, index, fallbackBbox = null) {
   return line;
 }
 
-function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini Vision", compare = null) {
+function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini Vision", compare = null, showGemini = true) {
   const control = document.createElement("label");
   control.className = "proofread-choice-select-control";
   const label = document.createElement("span");
@@ -5574,10 +5568,10 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
   select.className = "proofread-choice-select";
   select.name = `proofread-choice-${state.pageNum}-${index}`;
   select.setAttribute("aria-label", `第 ${index + 1} 个 block 采用版本`);
-  const choices = [["llm", candidateLabel]];
-  if (String(compare?.bdrc?.lines?.[index]?.text || "").trim()) choices.unshift(["bdrc", "BDRC 历史结果"]);
+  const choices = showGemini ? [["llm", candidateLabel]] : [];
   if (compare?.qwenReviews?.some((review) => review.index === index)) choices.push(["qwen", "千问候选"]);
   if (compare?.openaiReviews?.some((review) => review.index === index)) choices.push(["openai", "OpenAI 候选"]);
+  if (!choices.length) choices.push(["none", "待识别"]);
   choices.forEach(([value, text]) => {
     const option = document.createElement("option");
     option.value = value;
@@ -5585,6 +5579,7 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
     select.appendChild(option);
   });
   select.value = choices.some(([value]) => value === savedSide) ? savedSide : choices[0][0];
+  select.disabled = choices[0][0] === "none";
   control.append(label, select);
   return control;
 }
@@ -7233,6 +7228,20 @@ function getPrimaryOcrDisplay(compare) {
 
 function isAiOnlyMode() {
   return Boolean(document.querySelector(".app-shell")?.classList.contains("ai-only-mode"));
+}
+
+function isCurrentGeminiResult(side) {
+  return String(side?.model || "").split(":").pop() === "gemini-3.8-flash";
+}
+
+function getVisibleServerCompare(compare) {
+  if (!compare || !isAiOnlyMode()) return compare;
+  const empty = () => normalizeOcrCompareSide({ label: "", text: "", lines: [] });
+  return {
+    ...compare,
+    bdrc: empty(),
+    llm: isCurrentGeminiResult(compare.llm) ? compare.llm : empty(),
+  };
 }
 
 function getAiOnlyDisplayCompare(compare) {
