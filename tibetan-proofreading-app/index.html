@@ -7,10 +7,10 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>藏文典籍翻译工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20261012-gemini-shared-toolbar" />
+    <link rel="stylesheet" href="./styles.css?v=20261012-cloud-library-finder" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261012-server-ai-gemini-shared-toolbar" defer></script>
+    <script src="./app.js?v=20261012-cloud-library-finder" defer></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -152,6 +152,31 @@
             <div class="home-entry-stats" id="homeTranslationStats">暂无项目</div>
           </article>
         </div>
+
+        <section id="cloudLibrary" class="home-cloud-library" aria-label="云端待识别文档" hidden>
+          <div class="finder-toolbar">
+            <div class="finder-window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="finder-title"><i data-lucide="folder"></i><strong>待识别文档</strong><span id="cloudLibraryCount"></span></div>
+            <button id="cloudLibraryRefreshButton" class="ghost-button compact" type="button" aria-label="刷新云端文档"><i data-lucide="refresh-cw"></i>刷新</button>
+          </div>
+          <div class="finder-content">
+            <aside class="finder-sidebar" aria-label="位置"><span class="finder-sidebar-heading">位置</span><span class="finder-sidebar-item"><i data-lucide="cloud"></i>阿里云 OSS</span><span class="finder-sidebar-item is-active"><i data-lucide="folder"></i>待识别文档</span></aside>
+            <div class="finder-main">
+              <div id="cloudLibraryAuth" class="finder-auth">
+                <i data-lucide="lock-keyhole"></i>
+                <div><strong>云端目录已保护</strong><p>输入 Zeabur 服务的文档访问口令后，查看私有 OSS 文件。</p></div>
+                <input id="cloudLibraryPassword" type="password" autocomplete="off" placeholder="访问口令" aria-label="云端文档访问口令" />
+                <button id="cloudLibraryUnlockButton" class="primary-button compact" type="button">解锁</button>
+              </div>
+              <div id="cloudLibraryStatus" class="finder-status" role="status"></div>
+              <div id="cloudLibraryFiles" hidden>
+                <nav id="cloudLibraryBreadcrumb" class="finder-breadcrumb" aria-label="当前文件夹"></nav>
+                <div class="finder-columns" aria-hidden="true"><span>名称</span><span>修改日期</span><span>大小</span><span>种类</span></div>
+                <div id="cloudLibraryRows" class="finder-rows"></div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section class="home-projects" aria-label="当前项目">
           <div class="home-section-header">

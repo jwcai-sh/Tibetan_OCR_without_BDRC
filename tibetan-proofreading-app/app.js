@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261012-server-ai-gemini-shared-toolbar";
+const APP_BUILD_ID = "20261012-cloud-library-finder";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -8,6 +8,7 @@ const SOURCE_LAYOUT_VERSION = 4;
 window.__TIBETAN_PROOFREADING_APP_BUILD_ID__ = APP_BUILD_ID;
 const CACHE_PREFIX = "tibetan-proofreading-app:v1:";
 const ACTIVE_PROJECT_KEY = "tibetan-proofreading-app:active-project";
+const CLOUD_LIBRARY_SESSION_KEY = "tibetan-proofreading-app:cloud-library-token";
 const SOURCE_DB_NAME = "tibetan-proofreading-app-sources";
 const SOURCE_STORE_NAME = "files";
 const FOLDER_PROJECTS_KEY = "tibetan-proofreading-app:folder-projects:v1";
@@ -207,6 +208,14 @@ const state = {
   activeProjectRestoreInFlight: false,
 };
 
+const cloudLibrary = {
+  token: "",
+  items: [],
+  path: "",
+  loaded: false,
+  loading: false,
+};
+
 window.addEventListener("DOMContentLoaded", () => {
   document.documentElement.dataset.appBuild = APP_BUILD_ID;
   cacheElements();
@@ -216,6 +225,7 @@ window.addEventListener("DOMContentLoaded", () => {
   restoreWorkspaceLayout();
   configureDeploymentEndpoints();
   wireEvents();
+  initializeCloudLibrary();
   renderTranslationRoleOptions();
   renderActiveTranslationRoleMeta();
   configurePdfJs();
@@ -244,6 +254,16 @@ function cacheElements() {
     "homeOcrStats",
     "homeTranslationStats",
     "homeProjectList",
+    "cloudLibrary",
+    "cloudLibraryCount",
+    "cloudLibraryRefreshButton",
+    "cloudLibraryAuth",
+    "cloudLibraryPassword",
+    "cloudLibraryUnlockButton",
+    "cloudLibraryStatus",
+    "cloudLibraryFiles",
+    "cloudLibraryBreadcrumb",
+    "cloudLibraryRows",
     "fileLoadButton",
     "newProjectButton",
     "deleteProjectButton",
@@ -373,6 +393,11 @@ function wireEvents() {
   bindOptionalClick("homeBrowseTranslationProjectsButton", () => browseHomeProjects("translation"));
   bindOptionalClick("homeContinueTranslationTaskButton", () => continueHomeTask("translation"));
   bindOptionalClick("homeRefreshProjectsButton", () => renderHomeDashboard());
+  bindOptionalClick("cloudLibraryRefreshButton", () => void refreshCloudLibrary());
+  bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
+  els.cloudLibraryPassword?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") void unlockCloudLibrary();
+  });
   document.querySelectorAll("[data-workflow-card]").forEach((card) => {
     card.addEventListener("click", (event) => {
       if (event.target.closest("button, a, input, select, textarea")) return;
@@ -771,6 +796,7 @@ function showHomeView(options = {}) {
   els.workspace.classList.remove("translation-enabled", "translation-workflow");
   setAppTitle("藏文典籍翻译工作台");
   renderHomeDashboard();
+  if (cloudLibrary.token && !cloudLibrary.loaded) void refreshCloudLibrary();
   if (!options.silent) {
     setStatus("", "");
   }
@@ -1159,6 +1185,175 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
   } catch (error) {
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
+  }
+}
+
+function initializeCloudLibrary() {
+  if (!els.cloudLibrary) return;
+  els.cloudLibrary.hidden = !isCloudDeployment();
+  if (!isCloudDeployment()) return;
+  try {
+    cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || "";
+  } catch (_) {
+    cloudLibrary.token = "";
+  }
+  els.cloudLibraryAuth.hidden = Boolean(cloudLibrary.token);
+  els.cloudLibraryFiles.hidden = true;
+}
+
+async function unlockCloudLibrary() {
+  const token = els.cloudLibraryPassword?.value.trim() || "";
+  if (!token) {
+    setCloudLibraryStatus("请输入文档访问口令。", true);
+    return;
+  }
+  cloudLibrary.token = token;
+  await refreshCloudLibrary();
+}
+
+function setCloudLibraryStatus(message, isError = false) {
+  if (!els.cloudLibraryStatus) return;
+  els.cloudLibraryStatus.textContent = message;
+  els.cloudLibraryStatus.classList.toggle("is-error", isError);
+  els.cloudLibraryStatus.hidden = !message;
+}
+
+async function refreshCloudLibrary() {
+  if (!isCloudDeployment() || cloudLibrary.loading) return;
+  if (!cloudLibrary.token) {
+    els.cloudLibraryAuth.hidden = false;
+    els.cloudLibraryFiles.hidden = true;
+    return;
+  }
+  cloudLibrary.loading = true;
+  setCloudLibraryStatus("正在读取云端目录…");
+  try {
+    const response = await fetch(`${window.location.origin}/api/library`, {
+      headers: { Authorization: `Bearer ${cloudLibrary.token}` },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(new Error(payload.detail || `HTTP ${response.status}`), { status: response.status });
+    cloudLibrary.items = Array.isArray(payload.items) ? payload.items.filter((item) => typeof item.path === "string") : [];
+    cloudLibrary.loaded = true;
+    try { window.sessionStorage.setItem(CLOUD_LIBRARY_SESSION_KEY, cloudLibrary.token); } catch (_) { /* Session storage can be unavailable. */ }
+    els.cloudLibraryPassword.value = "";
+    els.cloudLibraryAuth.hidden = true;
+    els.cloudLibraryFiles.hidden = false;
+    els.cloudLibraryCount.textContent = `${cloudLibrary.items.length} 项`;
+    setCloudLibraryStatus(payload.truncated ? "目录超过 1000 项，仅显示前 1000 项。" : "");
+    renderCloudLibraryRows();
+  } catch (error) {
+    if (error.status === 401) {
+      cloudLibrary.token = "";
+      cloudLibrary.loaded = false;
+      try { window.sessionStorage.removeItem(CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
+      els.cloudLibraryAuth.hidden = false;
+      els.cloudLibraryFiles.hidden = true;
+    }
+    setCloudLibraryStatus(`云端目录读取失败：${error.message || error}`, true);
+  } finally {
+    cloudLibrary.loading = false;
+  }
+}
+
+function renderCloudLibraryRows() {
+  const currentPath = cloudLibrary.path;
+  const folders = new Set();
+  const files = [];
+  for (const item of cloudLibrary.items) {
+    if (!item.path.startsWith(currentPath)) continue;
+    const remainder = item.path.slice(currentPath.length);
+    const slash = remainder.indexOf("/");
+    if (slash >= 0) folders.add(remainder.slice(0, slash));
+    else if (remainder) files.push(item);
+  }
+  const collator = new Intl.Collator("zh-CN", { numeric: true });
+  files.sort((a, b) => collator.compare(a.path, b.path));
+  const breadcrumb = els.cloudLibraryBreadcrumb;
+  breadcrumb.replaceChildren();
+  let crumbPath = "";
+  ["待识别文档", ...currentPath.split("/").filter(Boolean)].forEach((name, index) => {
+    if (index) crumbPath += `${name}/`;
+    const targetPath = crumbPath;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = name;
+    button.className = "finder-crumb";
+    if (index === 0 || targetPath !== currentPath) button.addEventListener("click", () => {
+      cloudLibrary.path = targetPath;
+      renderCloudLibraryRows();
+    });
+    else button.setAttribute("aria-current", "page");
+    breadcrumb.appendChild(button);
+  });
+
+  const rows = els.cloudLibraryRows;
+  rows.replaceChildren();
+  for (const folder of [...folders].sort(collator.compare)) {
+    rows.appendChild(makeCloudLibraryRow(folder, "folder", "—", "文件夹", () => {
+      cloudLibrary.path = `${currentPath}${folder}/`;
+      renderCloudLibraryRows();
+    }));
+  }
+  for (const file of files) {
+    const name = file.path.slice(currentPath.length);
+    const updatedAt = file.updated_at ? new Date(file.updated_at) : null;
+    const date = updatedAt && !Number.isNaN(updatedAt.getTime())
+      ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(updatedAt) : "—";
+    rows.appendChild(makeCloudLibraryRow(name, "file-text", date,
+      name.toLowerCase().endsWith(".pdf") ? "PDF 文稿" : "图像", () => void openCloudLibraryFile(file),
+      formatCloudLibrarySize(file.size)));
+  }
+  if (!folders.size && !files.length) {
+    const empty = document.createElement("p");
+    empty.className = "finder-empty";
+    empty.textContent = "此文件夹中没有文档。";
+    rows.appendChild(empty);
+  }
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—") {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "finder-row";
+  row.addEventListener("click", onClick);
+  const nameCell = document.createElement("span");
+  nameCell.className = "finder-row-name";
+  const iconElement = document.createElement("i");
+  iconElement.dataset.lucide = icon;
+  nameCell.append(iconElement, document.createTextNode(name));
+  for (const value of [nameCell, date, size, kind]) {
+    const cell = document.createElement("span");
+    cell.className = "finder-cell";
+    if (typeof value === "string") cell.textContent = value;
+    else cell.appendChild(value);
+    row.appendChild(cell);
+  }
+  return row;
+}
+
+function formatCloudLibrarySize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1048576) return `${Math.round(size / 1024)} KB`;
+  return `${(size / 1048576).toFixed(1)} MB`;
+}
+
+async function openCloudLibraryFile(file) {
+  setCloudLibraryStatus(`正在打开“${file.path}”…`);
+  try {
+    const response = await fetch(`${window.location.origin}/api/library/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cloudLibrary.token}` },
+      body: JSON.stringify({ path: file.path }),
+    });
+    const book = await response.json().catch(() => ({}));
+    if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
+    setCloudLibraryStatus("");
+    await resumeRemoteProject({ sourceName: book.name, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr");
+  } catch (error) {
+    setCloudLibraryStatus(`打开文档失败：${error.message || error}`, true);
   }
 }
 
