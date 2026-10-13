@@ -3777,6 +3777,10 @@ function saveOcrResultFromParsed(parsed, source, statusMessage, fallbackLines = 
   const recognizedAt = new Date().toISOString();
   const previous = getOcrSourceCompare(state.ocrResults.get(state.pageNum));
   const compare = mergeRecognizedModelResults(previous, parsed.compare, source, lines, text);
+  if (source === "ai-vision" && compare?.llm) {
+    compare.llm.model = getOcrResponseModel(parsed.raw);
+    compare.llm.provider = getOcrResponseProvider(parsed.raw);
+  }
   if (compare?.llm && !compare.llm.recognizedAt) {
     compare.llm.recognizedAt = recognizedAt;
   }
@@ -7156,6 +7160,12 @@ function getOcrSourceCompare(result) {
   const storedCompare = normalizeOcrCompare(result.compare);
   const rawCompare = makeOcrCompareFromRawResult(result);
   if (storedCompare) {
+    // Older single-model saves omitted comparison metadata. Recover only from
+    // the stored response, never from the currently selected model.
+    if (result.source === "ai-vision" && !storedCompare.llm.model) {
+      storedCompare.llm.model = getOcrResponseModel(result.raw);
+      storedCompare.llm.provider = storedCompare.llm.provider || getOcrResponseProvider(result.raw);
+    }
     if (result.source === "bdrc") {
       const originalLines = result.lines?.length ? result.lines : extractOcrLines(result.raw);
       storedCompare.bdrc.lines = storedCompare.bdrc.lines.map((line, index) => ({
