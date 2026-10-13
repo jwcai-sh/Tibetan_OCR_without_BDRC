@@ -6509,6 +6509,37 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
   try { return await pending; } finally { lineCropRequests.delete(key); }
 }
 
+// Source previews must follow the current block bbox, not a historical model
+// crop. Keep this cache namespace separate so refreshing a preview never
+// changes the archived image that a model actually received.
+async function getSourceLinePreviewCrop(sourceLine, index, context) {
+  const key = JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v1"]);
+  let cached = null;
+  try { cached = await accessLineCropCache(key); } catch { /* Render without a persistent cache. */ }
+  if (cached?.payload?.review_image?.crop_version === 26 && cached.payload.images?.length) return cached;
+  if (lineCropRequests.has(key)) return lineCropRequests.get(key);
+  const pending = (async () => {
+    if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
+    const image = await getCurrentPageImageBlob();
+    const data = new FormData();
+    data.append("file", image, makePageImageName());
+    data.append("bbox", JSON.stringify(sourceLine.bbox));
+    const endpoint = context.endpoint.replace(/line-review$/, "line-preview");
+    const response = await fetch(endpoint, { method: "POST", body: data });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (payload.review_image?.crop_version !== 26 || !payload.images?.length) {
+      throw new Error("单行原文裁剪格式无效");
+    }
+    const entry = { payload, savedAt: new Date().toISOString(), context, purpose: "source-preview" };
+    try { await accessLineCropCache(key, entry); } catch { /* Preview remains available in memory. */ }
+    return entry;
+  })();
+  lineCropRequests.set(key, pending);
+  try { return await pending; } finally { lineCropRequests.delete(key); }
+}
+
 async function saveModelInputCrop(sourceLine, index, metadata, context, provider, model, blob, reviewContext = null) {
   if (!metadata) return;
   const entry = await getCachedLineCrop(sourceLine, index, metadata, context, blob);
@@ -6588,25 +6619,13 @@ function createModelInputPreview(sourceLine, index) {
   const load = async () => {
     try {
       if (!wrapper.isConnected || pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
-      const result = state.ocrResults.get(pageNum);
-      const compare = getOcrSourceCompare(result);
-      const metadata = compare?.llm?.lines?.[index]?.reviewImage || sourceLine.reviewImage;
-      const entry = await getCachedLineCrop(sourceLine, index, metadata, makeLineCropContext());
+      const entry = await getSourceLinePreviewCrop(sourceLine, index, makeLineCropContext());
       const payload = entry.payload;
       const previewImages = await composeLinePreviewImages(payload);
       if (!wrapper.isConnected || pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
       wrapper.replaceChildren();
       const note = document.createElement("small");
-      const recognizedLine = compare?.llm?.lines?.[index];
-      const usedByModel = sameLineCropMetadata(entry.modelInput?.reviewImage, payload.review_image) || (recognizedLine && !recognizedLine.error && !recognizedLine.missing
-        && !isDiagnosticOcrLine(recognizedLine) && sameLineCropMetadata(metadata, payload.review_image));
-      note.textContent = usedByModel
-        ? "已缓存 · 模型输入单行裁剪（按左→右排列）"
-        : "已缓存 · 单行裁剪仅供人工对照；模型识别使用整页原图";
-      if (compare?.qwen?.some((review) => review.index === index && review.reviewContext)) {
-        note.textContent += "；千问还使用整页定位图和宽边界局部图";
-      }
-      if (entry.cacheError) note.textContent = `裁剪未能缓存：${entry.cacheError}`;
+      note.textContent = "单行原文裁剪，仅供人工对照；模型识别使用整页原图";
       wrapper.appendChild(note);
       const strip = document.createElement("div");
       strip.style.display = "flex";
