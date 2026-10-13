@@ -1475,6 +1475,15 @@ def summarize_attempts(attempts: Any) -> str:
         model = attempt.get("modelRef") or attempt.get("model") or "model"
         status = attempt.get("status") or "unknown"
         error = compact_upstream_error(str(attempt.get("error") or ""))
+        raw = attempt.get("raw")
+        if isinstance(raw, dict):
+            feedback = raw.get("promptFeedback") or {}
+            blocked = feedback.get("blockReason") if isinstance(feedback, dict) else None
+            if blocked:
+                error = f"上游拒绝生成（blockReason={blocked}），未返回识别文字"
+            version = raw.get("modelVersion")
+            if version:
+                error += f"；实际模型={version}"
         chunks.append(f"{model}: {status}" + (f" ({redact_sensitive(str(error))})" if error else ""))
     return "；".join(chunks)
 

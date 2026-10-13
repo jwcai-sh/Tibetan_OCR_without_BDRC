@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tibetan_ocr_bridge import call_ai_layout, call_ai_line_preview, call_ai_ocr, call_ai_page_review, call_ai_review_models
+from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_ocr, call_ai_page_review, call_ai_review_models
 from tibetan_translation_bridge import call_translation
 
 
@@ -286,7 +286,11 @@ async def ai_ocr(
     prompt: str = Form(""),
     model: str = Form(""),
 ) -> dict[str, Any]:
-    return call_ai_ocr(await file.read(), file.filename or "page.png", ocr_text, prompt, model)
+    try:
+        return call_ai_ocr(await file.read(), file.filename or "page.png", ocr_text, prompt, model)
+    except RuntimeError as exc:
+        detail = load_ai_ocr_module().redact_sensitive(str(exc))
+        raise HTTPException(status_code=502, detail=detail[:1500]) from exc
 
 
 @app.post("/api/layout")
