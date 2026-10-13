@@ -5853,7 +5853,15 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
       });
     };
     updateCandidateQuality();
-    group.append(text, quality);
+    if (provider === "qwen" && candidate.alignmentStatus === "pending-review") {
+      const history = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "查看旧千问候选（行号待复核）";
+      history.append(summary, text, quality);
+      group.append(history);
+    } else {
+      group.append(text, quality);
+    }
   }
   button.addEventListener("click", async (event) => {
     event.stopPropagation();
@@ -5904,6 +5912,34 @@ function mergeQwenPageReviews(previous, payload, rows) {
   return mergePageReviews(previous, payload, rows, "qwen");
 }
 
+function reviewLineSimilarity(left, right) {
+  const letters = value => Array.from(String(value || "").replace(/[^\u0f40-\u0fbc]/g, ""));
+  const a = letters(left), b = letters(right);
+  if (a.length < 8 || b.length < 8) return 0;
+  const counts = new Map();
+  for (let i = 0; i < a.length - 1; i++) {
+    const pair = a[i] + a[i + 1];
+    counts.set(pair, (counts.get(pair) || 0) + 1);
+  }
+  let overlap = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const pair = b[i] + b[i + 1], remaining = counts.get(pair) || 0;
+    if (remaining) { overlap++; counts.set(pair, remaining - 1); }
+  }
+  return 2 * overlap / (a.length + b.length - 2);
+}
+
+function findPageReviewRowConflicts(payload, referenceLines) {
+  if (!Array.isArray(payload?.lines) || !Array.isArray(referenceLines)) return [];
+  return payload.lines.flatMap(row => {
+    const own = reviewLineSimilarity(row.text, referenceLines[row.index]?.text);
+    const matches = referenceLines.map((line, index) => ({index, score: reviewLineSimilarity(row.text, line?.text)}))
+      .filter(match => match.index !== row.index && match.score >= 0.72 && match.score >= own + 0.22)
+      .sort((a, b) => b.score - a.score);
+    return matches.length ? [{index: row.index, matchingIndex: matches[0].index}] : [];
+  });
+}
+
 async function requestWholePageReview(endpoint, blob, rows, model = "") {
   const form = new FormData();
   form.append("file", blob, makePageImageName());
@@ -5948,6 +5984,13 @@ async function reviewProviderWholePage(provider, button, select, feedback) {
       throw new Error("原文或校对结果已更改，未覆盖原结果，请重试。");
     }
     const compare = getOcrSourceCompare(original) || makeEmptyOcrCompare(original);
+    if (provider === "qwen") {
+      const conflicts = findPageReviewRowConflicts(payload, getEffectiveOcrSideLines(compare.llm));
+      if (conflicts.length) {
+        const first = conflicts[0];
+        throw new Error(`结果疑似错行：第 ${first.index + 1} 行更像第 ${first.matchingIndex + 1} 行（共 ${conflicts.length} 处）。原千问结果保留，请检查行定位后重试。`);
+      }
+    }
     const key = provider === "qwen" ? "qwenReviews" : "openaiReviews";
     compare[key] = mergePageReviews(compare[key] || [], payload, rows, provider);
     original.compare = compare;

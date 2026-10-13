@@ -16,4 +16,15 @@ assert.equal(merged.find(x=>x.index===0).errorRanges,undefined);
 assert.throws(()=>vm.runInContext('mergeQwenPageReviews(previous,{...response,lines:[response.lines[0]]},rows)',ctx));
 assert.throws(()=>vm.runInContext('mergeQwenPageReviews(previous,{...response,lines:[response.lines[0],response.lines[0]]},rows)',ctx));
 assert.equal(vm.runInContext('previous[0].text',ctx),'old');
+const reference = [
+  {text:'ཤེས་རབ་ཕ་རོལ་ཕྱིན་པ།'},
+  {text:'བཅོམ་ལྡན་འདས་མ་ལ་ཕྱག་འཚལ་ལོ།'},
+];
+ctx.reference = reference;
+ctx.shifted = {lines:[{index:0,text:'བཅོམ་ལྡན་འདས་མ་ལ་ཕྱག་འཚལ་ལོ།'}]};
+ctx.aligned = {lines:[{index:0,text:'ཤེས་རབ་ཕ་རོལ་ཕྱིན་པ༎'}]};
+const conflicts = vm.runInContext('findPageReviewRowConflicts(shifted,reference)',ctx);
+assert.equal(conflicts.length,1);
+assert.equal(conflicts[0].matchingIndex,1);
+assert.equal(vm.runInContext('findPageReviewRowConflicts(aligned,reference).length',ctx),0);
 console.log('Whole-page Qwen validates row identities before replacing only its own results');
