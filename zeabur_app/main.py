@@ -290,7 +290,8 @@ async def ai_ocr(
         return call_ai_ocr(await file.read(), file.filename or "page.png", ocr_text, prompt, model)
     except RuntimeError as exc:
         detail = load_ai_ocr_module().redact_sensitive(str(exc))
-        raise HTTPException(status_code=502, detail=detail[:1500]) from exc
+        status = 422 if "blockReason=" in detail else 502
+        raise HTTPException(status_code=status, detail=detail[:1500]) from exc
 
 
 @app.post("/api/layout")
