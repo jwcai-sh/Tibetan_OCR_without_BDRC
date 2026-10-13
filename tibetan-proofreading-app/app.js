@@ -8479,8 +8479,7 @@ async function repairSourceRowBindings(result) {
   const count = compare?.llm?.lines?.length || 0;
   if (!count) return;
   sourceAlignmentJobs.add(result);
-  const page = state.pageNum, key = state.cacheKey;
-  const before = JSON.stringify(result);
+  const page = state.pageNum;
   try {
     const blob = await getCurrentPageImageBlob();
     const form = new FormData();
@@ -8490,14 +8489,15 @@ async function repairSourceRowBindings(result) {
     const response = await fetch(endpoint, {method: "POST", body: form});
     if (!response.ok) throw new Error("原文行定位接口不可用");
     const layout = await response.json();
-    if (state.pageNum !== page || state.cacheKey !== key || state.ocrResults.get(page) !== result
-        || JSON.stringify(result) !== before) { sourceAlignmentJobs.delete(result); return; }
+    if (state.pageNum !== page || state.ocrResults.get(page) !== result) { sourceAlignmentJobs.delete(result); return; }
+    const latestCompare = getOcrSourceCompare(result);
     const layoutBboxes = layout.layout_bboxes;
-    if (layout.alignment_version !== 2 || !layout.alignment_matched || !Array.isArray(layoutBboxes) || layoutBboxes.length !== count) {
+    if (layout.alignment_version !== 2 || !layout.alignment_matched || !Array.isArray(layoutBboxes)
+        || layoutBboxes.length !== count || latestCompare?.llm?.lines?.length !== count) {
       setStatus("原文物理行数与识别块数不一致，待人工核对；未自动移动识别或校对内容。", "warn");
       return;
     }
-    for (const lines of [result.lines, compare.llm.lines]) {
+    for (const lines of [result.lines, latestCompare.llm.lines]) {
       if (!Array.isArray(lines) || lines.length !== count) continue;
       lines.forEach((line, i) => {
         line.bbox = layoutBboxes[i];
@@ -8506,10 +8506,10 @@ async function repairSourceRowBindings(result) {
         line.sourceRowIndex = i;
       });
     }
-    compare.qwenReviews = (compare.qwenReviews || []).map(review => ({...review,
+    latestCompare.qwenReviews = (latestCompare.qwenReviews || []).map(review => ({...review,
       alignmentStatus: "pending-review",
       note: "待复核：原文行映射已修正，旧千问候选可能错行；原文字及人工修改保留。"}));
-    result.compare = compare;
+    result.compare = latestCompare;
     result.sourceAlignmentVersion = 2;
     saveCachedResults();
     updateOcrPanelForPage();
