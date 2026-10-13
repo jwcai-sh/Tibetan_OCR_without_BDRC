@@ -196,7 +196,7 @@ def split_enlarged_line(enlarged, tile_width):
     return tiles, ranges
 
 
-LINE_CROP_VERSION = 25
+LINE_CROP_VERSION = 26
 
 
 def find_row_frame_clips(image_bytes, center, row, page_width, page_height):
@@ -609,6 +609,8 @@ def resolve_line_preview_bbox(bbox: dict[str, float], metadata: dict[str, Any], 
     saved_bbox = metadata.get("source_bbox")
     if not saved_bbox or metadata.get("source_size") != source_size:
         return bbox
+    if metadata.get("crop_version") != LINE_CROP_VERSION:
+        return dict(bbox)
     resolved = dict(saved_bbox)
     if metadata.get("crop_version") != LINE_CROP_VERSION:
         for key in ("clip_top", "clip_bottom", "clip_left", "clip_right", "crop_pad_y"):
@@ -1438,21 +1440,18 @@ def split_layout_bboxes(
 
 
 def build_layout_payload(image_bytes: bytes, line_count: int) -> dict[str, Any]:
-    """Return source coordinates for existing OCR rows without calling a model."""
+    """Bind equal-count physical text rows; never stretch or split a mapping."""
     count = max(0, int(line_count))
-    layout_bboxes = detect_text_line_bboxes(image_bytes)
-    if not count or not layout_bboxes:
-        return {"lines": [], "layout_bboxes": layout_bboxes, "layout_bbox_source": "projection"}
-
-    lines, _ = attach_layout_bboxes(
-        [{"text": ""} for _ in range(count)],
-        image_bytes,
-    )
-    return {
-        "lines": lines,
-        "layout_bboxes": layout_bboxes,
-        "layout_bbox_source": "projection",
-    }
+    boxes = detect_pillow_text_line_bboxes(image_bytes)
+    # Isolated, narrow bottom folio numbers are not Tibetan transcription rows.
+    text_boxes = [box for box in boxes if not (
+        box["y"] > .94 and box["width"] < .15 and box["height"] < .04)]
+    matched = bool(count and len(text_boxes) == count)
+    return {"lines": [{"text": "", "bbox": box, "source_row_index": i}
+                      for i, box in enumerate(text_boxes)] if matched else [],
+            "layout_bboxes": text_boxes, "layout_bbox_source": "physical-rows-v2",
+            "alignment_version": 2, "alignment_matched": matched,
+            "detected_line_count": len(text_boxes), "requested_line_count": count}
 
 def parse_model_text(payload: dict[str, Any]) -> str:
     if isinstance(payload.get("text"), str):

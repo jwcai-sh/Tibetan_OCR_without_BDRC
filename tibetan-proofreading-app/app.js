@@ -5547,7 +5547,7 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
   select.name = `proofread-choice-${state.pageNum}-${index}`;
   select.setAttribute("aria-label", `第 ${index + 1} 个 block 采用版本`);
   const choices = showGemini ? [["llm", candidateLabel]] : [];
-  if (compare?.qwenReviews?.some((review) => review.index === index)) choices.push(["qwen", "千问候选"]);
+  if (compare?.qwenReviews?.some((review) => review.index === index && review.alignmentStatus !== "pending-review")) choices.push(["qwen", "千问候选"]);
   // OpenAI candidates remain stored, but are hidden until API access is enabled.
   if (!choices.length) choices.push(["none", "待识别"]);
   choices.forEach(([value, text]) => {
@@ -5791,6 +5791,12 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
   group.append(controls, feedback);
   const candidate = getOcrSourceCompare(state.ocrResults.get(state.pageNum))?.[reviewKey]?.find((review) => review.index === index);
   if (candidate) {
+    if (provider === "qwen" && candidate.alignmentStatus === "pending-review") {
+      const warning = document.createElement("p");
+      warning.setAttribute("role", "status");
+      warning.textContent = "待复核：此千问候选可能错行，旧结果保留，暂不可直接采用。";
+      group.append(warning);
+    }
     const text = document.createElement("div");
     text.className = "tibetan-text openai-review-candidate";
     text.contentEditable = "true";
@@ -6305,7 +6311,7 @@ function makeLineCropContext() {
 
 function makeLineCropCacheKey(sourceLine, index, context) {
   return JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "row-crop-v25"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "row-crop-v26"]);
 }
 
 function sameLineCropMetadata(a, b) {
@@ -6344,8 +6350,8 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
   const key = makeLineCropCacheKey(sourceLine, index, context);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Preview can still render. */ }
-  const currentInput = metadata?.crop_version === 25;
-  if (cached?.payload?.review_image?.crop_version === 25 && cached?.payload?.images?.length && (!currentInput || sameLineCropMetadata(metadata, cached.payload.review_image))) {
+  const currentInput = metadata?.crop_version === 26;
+  if (cached?.payload?.review_image?.crop_version === 26 && cached?.payload?.images?.length && (!currentInput || sameLineCropMetadata(metadata, cached.payload.review_image))) {
     return cached;
   }
   if (lineCropRequests.has(key)) return lineCropRequests.get(key);
@@ -6360,7 +6366,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
     const response = await fetch(endpoint, { method: "POST", body: data });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (payload.review_image?.crop_version !== 25) throw new Error("裁剪服务尚未更新，请重启本地服务后重试");
+    if (payload.review_image?.crop_version !== 26) throw new Error("裁剪服务尚未更新，请重启本地服务后重试");
     const entry = { payload, savedAt: new Date().toISOString(), context, modelInputs: cached?.modelInputs || {}, ...(cached?.modelInput ? { modelInput: cached.modelInput } : {}) };
     try { await accessLineCropCache(key, entry); }
     catch (error) { entry.cacheError = error.message; }
@@ -7083,6 +7089,10 @@ function saveProofreadBlockChoice(index, side, card) {
   const candidateProvider = side === "qwen" || side === "openai" ? side : "";
   const candidate = candidateProvider
     ? compare[`${candidateProvider}Reviews`]?.find((review) => review.index === index) : null;
+  if (candidate?.alignmentStatus === "pending-review") {
+    setStatus("千问候选行对应待复核，不能直接采用；原结果保留。", "warn");
+    return false;
+  }
   if (candidateProvider && !candidate) {
     setStatus(`当前 block 没有可采用的${selectedProviderLabel}候选。`, "warn");
     return false;
@@ -8459,8 +8469,57 @@ function downloadBlob(blob, fileName) {
   URL.revokeObjectURL(url);
 }
 
+const sourceAlignmentJobs = new WeakSet();
+async function repairSourceRowBindings(result) {
+  if (!result || !["ai-vision", "proofread"].includes(result.source) || result.sourceAlignmentVersion === 2
+      || sourceAlignmentJobs.has(result) || !getVisibleSourceElement()) return;
+  const compare = getOcrSourceCompare(result);
+  const count = compare?.llm?.lines?.length || 0;
+  if (!count) return;
+  sourceAlignmentJobs.add(result);
+  const page = state.pageNum, key = state.cacheKey;
+  const before = JSON.stringify(result);
+  try {
+    const blob = await getCurrentPageImageBlob();
+    const form = new FormData();
+    form.append("file", blob, "page.png");
+    form.append("line_count", String(count));
+    const endpoint = getAiVisionLineReviewEndpoint().replace(/\/line-review$/, "/layout");
+    const response = await fetch(endpoint, {method: "POST", body: form});
+    if (!response.ok) throw new Error("原文行定位接口不可用");
+    const layout = await response.json();
+    if (state.pageNum !== page || state.cacheKey !== key || state.ocrResults.get(page) !== result
+        || JSON.stringify(result) !== before) { sourceAlignmentJobs.delete(result); return; }
+    if (layout.alignment_version !== 2 || !layout.alignment_matched || layout.lines.length !== count) {
+      setStatus("原文物理行数与识别块数不一致，待人工核对；未自动移动识别或校对内容。", "warn");
+      return;
+    }
+    for (const lines of [result.lines, compare.llm.lines]) {
+      if (!Array.isArray(lines) || lines.length !== count) continue;
+      lines.forEach((line, i) => {
+        line.bbox = layout.lines[i].bbox;
+        line.bboxApproximate = false;
+        line.reviewImage = null;
+        line.sourceRowIndex = i;
+      });
+    }
+    compare.qwenReviews = (compare.qwenReviews || []).map(review => ({...review,
+      alignmentStatus: "pending-review",
+      note: "待复核：原文行映射已修正，旧千问候选可能错行；原文字及人工修改保留。"}));
+    result.compare = compare;
+    result.sourceAlignmentVersion = 2;
+    saveCachedResults();
+    updateOcrPanelForPage();
+    renderSourceBlockOverlay();
+  } catch (error) {
+    setStatus(`原文行对应检查失败：${error.message}；原结果保留。`, "warn");
+    sourceAlignmentJobs.delete(result);
+  }
+}
+
 function updateOcrPanelForPage() {
   const result = state.ocrResults.get(state.pageNum);
+  void repairSourceRowBindings(result);
   const sourceLabel = getResultSourceLabel(result);
   const profile = OCR_PROFILES[result?.ocrProfile] || getSelectedOcrProfile();
   const sourceCompare = getAiOnlyDisplayCompare(getOcrSourceCompare(result));
