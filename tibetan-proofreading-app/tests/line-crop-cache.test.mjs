@@ -3,15 +3,16 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
 const source=app.slice(app.indexOf('const lineCropRequests ='),app.indexOf('function createModelInputPreview('));
-const storage=new Map();let calls=0;
-const meta={crop_version:24,source_size:{width:100,height:20},source_bbox:{x:0,y:0,width:1,height:1},crop_pixels:{x:0,y:0,width:100,height:20},review_size:{width:500,height:100},tile_ranges:[[0,500]]};
+const storage=new Map();let calls=0;const forms=[];
+const meta={crop_version:26,source_size:{width:100,height:20},source_bbox:{x:0,y:0,width:1,height:1},crop_pixels:{x:0,y:0,width:100,height:20},review_size:{width:500,height:100},tile_ranges:[[0,500]]};
 const context={cacheKey:'doc-a',pageNum:1,dpi:260,profile:'traditional',endpoint:'local/line-review'};
 const line={bbox:{x:0,y:0,width:1,height:1}};
 function boot(){
- const ctx=vm.createContext({Blob,FormData,Date,Error,console,state:{cacheKey:'doc-a',pageNum:1},
+ const ctx=vm.createContext({Blob,FormData,Date,Error,console,state:{cacheKey:'doc-a',pageNum:1,ocrResults:new Map()},
  normalizeBbox:b=>b,getCurrentPageImageBlob:async()=>new Blob(['page']),makePageImageName:()=> 'page.png',
+ getOcrSourceCompare:()=>({llm:{lines:[{text:'a'},{text:'b'},{text:'c'}]}}),
  getAiVisionLineReviewEndpoint:()=> 'local/line-review',
- fetch:async()=>{calls++;return{ok:true,json:async()=>({images:['data:image/png;base64,test'],review_image:meta})};}});
+ fetch:async(_url,options)=>{calls++;forms.push(options.body);return{ok:true,json:async()=>({images:['data:image/png;base64,test'],review_image:meta})};}});
  vm.runInContext(source,ctx);
  ctx.accessLineCropCache=async(key,value)=>{if(value)storage.set(key,structuredClone(value));return structuredClone(storage.get(key)||null);};
  return ctx;
@@ -19,7 +20,7 @@ function boot(){
 let ctx=boot();
 const first=await ctx.getCachedLineCrop(line,0,null,context);
 assert.equal(calls,1);assert.equal(first.modelInput,undefined);
-assert.match(ctx.makeLineCropCacheKey(line,0,context),/row-crop-v24/);
+assert.match(ctx.makeLineCropCacheKey(line,0,context),/row-crop-v26/);
 ctx=boot(); // A new browser lifetime, same persistent storage.
 await ctx.getCachedLineCrop(line,0,null,context);assert.equal(calls,1);
 await ctx.saveModelInputCrop(line,0,meta,context,'gemini','test',new Blob(['page']));
@@ -34,4 +35,9 @@ assert.equal(retained.modelInputs.openai.model,'test-openai');
 ctx.state.pageNum=2;await ctx.getCachedLineCrop(line,0,null,{...context,pageNum:2});assert.equal(calls,2);
 ctx.state.cacheKey='doc-b';await ctx.getCachedLineCrop(line,0,null,{...context,cacheKey:'doc-b',pageNum:2});assert.equal(calls,3);
 await ctx.getCachedLineCrop({...line,bbox:{...line.bbox,x:.01}},0,null,{...context,cacheKey:'doc-b',pageNum:2});assert.equal(calls,4);
+ctx.state.pageNum=1;ctx.state.cacheKey='doc-a';
+await ctx.getSourceLinePreviewCrop({...line,sourceRowIndex:2},2,context);
+assert.equal(forms.at(-1).get('physical_row_index'),'2');
+assert.equal(forms.at(-1).get('physical_row_count'),'3');
+assert.match([...storage.keys()].at(-1),/source-preview-v2/);
 console.log('Crop previews survive reload; document/page/coordinate boundaries are isolated; successful model inputs retain matching image snapshots.');

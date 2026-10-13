@@ -250,7 +250,7 @@ def find_row_frame_clips(image_bytes, center, row, page_width, page_height):
 def bound_legacy_line_crop(image_bytes, bbox):
     """Resolve a saved block to one physical row without splitting its stacks."""
     bbox = dict(bbox)
-    if bbox["height"] > bbox["width"]:
+    if bbox["height"] > bbox["width"] and not isinstance(bbox.get("physical_row_index"), int):
         return bbox
     if cv2 is None or np is None:
         return bound_projection_line_crop(image_bytes, bbox)
@@ -285,7 +285,9 @@ def bound_legacy_line_crop(image_bytes, bbox):
     centers = [(oy + (r["y"] + r["height"] / 2) * height) / page_height for r in rows]
     index = min(range(len(rows)), key=lambda i: abs(centers[i] - mid_y))
     saved_index = bbox.get("physical_row_index")
-    if isinstance(saved_index, int) and 0 <= saved_index < len(rows):
+    if isinstance(saved_index, int):
+        if not 0 <= saved_index < len(rows):
+            raise RuntimeError("指定的原文物理行不存在，无法生成单行预览。")
         index = saved_index
     row = rows[index]
     bbox.update(x=(ox + row["x"] * width) / page_width,
@@ -2139,6 +2141,22 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/line-preview":
                 bbox = parse_normalized_bbox(field_value(form, "bbox"))
+                physical_row_index = field_value(form, "physical_row_index").strip()
+                if physical_row_index:
+                    try:
+                        bbox["physical_row_index"] = int(physical_row_index)
+                    except ValueError as exc:
+                        raise RuntimeError("physical_row_index must be a non-negative integer") from exc
+                    if bbox["physical_row_index"] < 0:
+                        raise RuntimeError("physical_row_index must be a non-negative integer")
+                expected_physical_row_count = field_value(form, "physical_row_count").strip()
+                if expected_physical_row_count:
+                    try:
+                        expected_physical_row_count = int(expected_physical_row_count)
+                    except ValueError as exc:
+                        raise RuntimeError("physical_row_count must be a positive integer") from exc
+                    if expected_physical_row_count < 1:
+                        raise RuntimeError("physical_row_count must be a positive integer")
                 metadata = json.loads(field_value(form, "review_image") or "{}")
                 # Reproduce the exact saved crop, including neighbour limits.
                 source_size = metadata.get("source_size", {})
@@ -2166,6 +2184,12 @@ class Handler(BaseHTTPRequestHandler):
                             bbox, metadata, {"width": image.width, "height": image.height}
                         )
                         tiles, metadata = prepare_line_review_images(image_bytes, bbox)
+                resolved_bbox = metadata.get("source_bbox", {})
+                if expected_physical_row_count and (
+                    resolved_bbox.get("physical_row_count") != expected_physical_row_count
+                    or resolved_bbox.get("physical_row_index") != bbox.get("physical_row_index")
+                ):
+                    raise RuntimeError("原文物理行数与识别 block 数不一致，无法安全生成对应的单行预览。")
                 self.send_json({"images": ["data:image/png;base64," + base64.b64encode(tile).decode("ascii") for tile in tiles], "review_image": metadata, "exact_match": exact_match})
                 return
 

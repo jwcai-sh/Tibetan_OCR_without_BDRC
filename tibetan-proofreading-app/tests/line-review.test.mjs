@@ -20,11 +20,16 @@ assert.match(
 );
 assert.match(
   app.slice(sourceRowsStart, sourceRowsEnd),
-  /renderQwenLineReview\([\s\S]*renderOpenAiLineReview\([\s\S]*row\.append\(number, text, actions\)/,
+  /actions\.appendChild\(renderQwenLineReview\([\s\S]*row\.append\(number, text, actions\)/,
   "the active row view must attach the available model review actions to each eligible row"
 );
 assert.match(server, /"\/line-review"/, "the AI OCR server must expose a dedicated line-review route");
 assert.match(server, /def prepare_line_review_images\(/, "previews may still tightly crop the selected source line");
+assert.match(app, /"source-preview-v2"/, "source previews must invalidate cached full-region crops");
+assert.match(app, /data\.append\("physical_row_index", String\(rowIndex\)\)/, "traditional source previews must request their block's physical row");
+assert.match(app, /data\.append\("physical_row_count", String\(sourceLineCount\)\)/, "source previews must include the expected number of physical rows");
+assert.match(server, /field_value\(form, "physical_row_index"\)/, "line-preview must honor an explicit source physical-row index");
+assert.match(server, /field_value\(form, "physical_row_count"\)/, "line-preview must reject mappings whose physical-row count is ambiguous");
 assert.match(server, /call_gemini_page_review/, "the review path must accept a complete page");
 
 console.log("line review regression check passed");

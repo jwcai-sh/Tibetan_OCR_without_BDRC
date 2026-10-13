@@ -164,6 +164,42 @@ def test_legacy_multiline_bbox_is_narrowed_to_nearest_physical_row():
     assert crop['height'] < 50, 'the crop must exclude the neighboring printed row'
 
 
+def test_source_preview_physical_row_index_overrides_broad_bbox_midpoint():
+    image = np.full((400, 900, 3), 245, dtype=np.uint8)
+    for y in (100, 132):
+        for x in range(150, 760, 32):
+            cv2.rectangle(image, (x, y), (x + 9, y + 24), (20, 20, 20), -1)
+    ok, encoded = cv2.imencode('.png', image)
+    assert ok
+    center = {'id': 'center', 'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0}
+    # The broad bbox midpoint is closest to the second line, but this preview
+    # belongs to block 0 and must stay on the first physical line.
+    bbox = {'x': .1, 'y': .3, 'width': .8, 'height': .2, 'physical_row_index': 0}
+
+    with patch.object(ai_vision, 'detect_traditional_column_bboxes', return_value=[center]):
+        bounded = ai_vision.bound_legacy_line_crop(encoded.tobytes(), bbox)
+
+    assert bounded['physical_row_index'] == 0
+    assert bounded['y'] < .3, 'the selected first row must not follow the broad bbox midpoint'
+
+
+def test_source_preview_does_not_fall_back_when_requested_row_is_missing():
+    image = np.full((400, 900, 3), 245, dtype=np.uint8)
+    cv2.rectangle(image, (180, 100), (190, 124), (20, 20, 20), -1)
+    ok, encoded = cv2.imencode('.png', image)
+    assert ok
+    center = {'id': 'center', 'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0}
+    bbox = {'x': .1, 'y': .2, 'width': .8, 'height': .3, 'physical_row_index': 1}
+
+    with patch.object(ai_vision, 'detect_traditional_column_bboxes', return_value=[center]):
+        try:
+            ai_vision.bound_legacy_line_crop(encoded.tobytes(), bbox)
+        except RuntimeError as error:
+            assert '指定的原文物理行不存在' in str(error)
+        else:
+            raise AssertionError('a missing requested source row must not fall back to a broad crop')
+
+
 def test_center_row_crop_keeps_detached_top_and_bottom_strokes():
     image = np.full((200, 800, 3), 245, dtype=np.uint8)
     # Simulate Tibetan top and bottom marks detached from the OCR detector's

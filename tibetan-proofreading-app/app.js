@@ -6516,7 +6516,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
 // changes the archived image that a model actually received.
 async function getSourceLinePreviewCrop(sourceLine, index, context) {
   const key = JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v1"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v2"]);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Render without a persistent cache. */ }
   if (cached?.payload?.review_image?.crop_version === 26 && cached.payload.images?.length) return cached;
@@ -6527,6 +6527,15 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
     const data = new FormData();
     data.append("file", image, makePageImageName());
     data.append("bbox", JSON.stringify(sourceLine.bbox));
+    const profileId = typeof context.profile === "string" ? context.profile : context.profile?.id;
+    if (profileId === "traditional" && !["left", "right", "左侧", "右侧"].includes(sourceLine.regionId || sourceLine.regionLabel)) {
+      const rowIndex = Number.isInteger(sourceLine.sourceRowIndex) ? sourceLine.sourceRowIndex
+        : Number.isInteger(sourceLine.regionLineIndex) ? sourceLine.regionLineIndex : index;
+      data.append("physical_row_index", String(rowIndex));
+      const compare = getOcrSourceCompare(state.ocrResults.get(context.pageNum));
+      const sourceLineCount = compare?.llm?.lines?.length || compare?.bdrc?.lines?.length || 0;
+      if (sourceLineCount > 0) data.append("physical_row_count", String(sourceLineCount));
+    }
     const endpoint = context.endpoint.replace(/line-review$/, "line-preview");
     const response = await fetch(endpoint, { method: "POST", body: data });
     const payload = await response.json();
