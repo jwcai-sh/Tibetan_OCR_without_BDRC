@@ -1205,7 +1205,12 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       translationResults: remoteState.translation_results || remoteState.translationResults || {},
       ocrQualityReviews: remoteState.ocrQualityReviews || [],
     }));
-    await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+    state.remoteRestoreInFlight = true;
+    try {
+      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+    } finally {
+      state.remoteRestoreInFlight = false;
+    }
     setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
   } catch (error) {
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
@@ -2677,7 +2682,7 @@ async function createRemoteBook(file) {
 }
 
 function scheduleRemoteStateSave(payload, immediate = false) {
-  if (!isCloudDeployment() || !state.remoteBookId) return;
+  if (!isCloudDeployment() || !state.remoteBookId || state.remoteRestoreInFlight) return;
   if (state.remoteSaveTimer) window.clearTimeout(state.remoteSaveTimer);
   const bookId = state.remoteBookId;
   const save = async () => {
