@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261013-pdf-first-paint";
+const APP_BUILD_ID = "20261013-fast-line-preview";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -5078,6 +5078,52 @@ async function getCurrentPageImageBlob() {
   });
 }
 
+async function getSourcePreviewPageBlob(pageNum) {
+  if (state.sourceType === "image") return state.imageBlob;
+  const pdfDoc = state.pdfDoc;
+  if (!pdfDoc) return getCurrentPageImageBlob();
+
+  const page = await pdfDoc.getPage(pageNum);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const dpi = getBatchPdfRenderDpi(
+    baseViewport.width, baseViewport.height, Number(els.dpiInput.value) || 260,
+  );
+  const cacheKey = `source-preview-client:${makePdfPageRenderCacheKey(pageNum, dpi)}`;
+  const cached = state.pdfPageRenderCache.get(cacheKey);
+  if (cached?.blob) return cached.blob;
+  if (cached?.pending) return cached.pending;
+
+  const pending = (async () => {
+    try {
+      const viewport = page.getViewport({ scale: dpi / 72 });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("无法创建预览画布");
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context, viewport }).promise;
+      return await new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("无法生成预览页图")), "image/png");
+      });
+    } catch (error) {
+      if (state.pdfDoc !== pdfDoc) throw error;
+      console.warn("Browser source preview render unavailable, falling back to server", error);
+      return getRenderedPdfPageBlobWithCache(pageNum, dpi);
+    }
+  })();
+  state.pdfPageRenderCache.set(cacheKey, { pending, url: "" });
+  try {
+    const blob = await pending;
+    if (state.pdfDoc === pdfDoc) state.pdfPageRenderCache.set(cacheKey, { blob, url: "" });
+    return blob;
+  } catch (error) {
+    state.pdfPageRenderCache.delete(cacheKey);
+    throw error;
+  }
+}
+
 async function downloadCurrentPageImage() {
   if (!state.pageCount) {
     setStatus("请先上传 PDF 或图片。", "warn");
@@ -6516,14 +6562,15 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
 // changes the archived image that a model actually received.
 async function getSourceLinePreviewCrop(sourceLine, index, context) {
   const key = JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v2"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v3"]);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Render without a persistent cache. */ }
   if (cached?.payload?.review_image?.crop_version === 26 && cached.payload.images?.length) return cached;
   if (lineCropRequests.has(key)) return lineCropRequests.get(key);
   const pending = (async () => {
     if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
-    const image = await getCurrentPageImageBlob();
+    const image = await getSourcePreviewPageBlob(context.pageNum);
+    if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
     const data = new FormData();
     data.append("file", image, makePageImageName());
     data.append("bbox", JSON.stringify(sourceLine.bbox));
