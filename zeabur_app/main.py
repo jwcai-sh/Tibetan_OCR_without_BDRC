@@ -318,9 +318,12 @@ async def ai_layout(file: UploadFile = File(...), line_count: int = Form(0)) -> 
 async def ai_line_preview(
     file: UploadFile = File(...), bbox: str = Form(...), review_image: str = Form(""),
     physical_row_index: str = Form(""), physical_row_count: str = Form(""),
+    preview_format: str = Form(""),
 ) -> dict[str, Any]:
     try:
-        return call_ai_line_preview(await file.read(), bbox, review_image, physical_row_index, physical_row_count)
+        return call_ai_line_preview(
+            await file.read(), bbox, review_image, physical_row_index, physical_row_count, preview_format
+        )
     except (ValueError, KeyError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 

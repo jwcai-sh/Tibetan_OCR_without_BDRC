@@ -28,6 +28,7 @@ def call_ai_layout(image: bytes, line_count: int) -> dict[str, Any]:
 def call_ai_line_preview(
     image: bytes, bbox: str, review_image: str = "",
     physical_row_index: str = "", physical_row_count: str = "",
+    preview_format: str = "",
 ) -> dict[str, Any]:
     import base64
     import json
@@ -59,8 +60,19 @@ def call_ai_line_preview(
         or resolved_bbox.get("physical_row_index") != parsed_bbox.get("physical_row_index")
     ):
         raise RuntimeError("原文物理行数与识别 block 数不一致，无法安全生成对应的单行预览。")
+    if preview_format == "jpeg":
+        compressed = []
+        for tile in tiles:
+            output = BytesIO()
+            with Image.open(BytesIO(tile)) as source:
+                source.convert("RGB").save(
+                    output, format="JPEG", quality=92, subsampling=0, optimize=True
+                )
+            compressed.append(output.getvalue())
+        tiles = compressed
+    media_type = "image/jpeg" if preview_format == "jpeg" else "image/png"
     return {
-        "images": ["data:image/png;base64," + base64.b64encode(tile).decode("ascii") for tile in tiles],
+        "images": [f"data:{media_type};base64," + base64.b64encode(tile).decode("ascii") for tile in tiles],
         "review_image": crop_metadata,
     }
 

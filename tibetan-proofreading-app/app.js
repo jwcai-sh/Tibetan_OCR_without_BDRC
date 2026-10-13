@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261013-fast-line-preview-v2";
+const APP_BUILD_ID = "20261013-fast-line-preview-v3";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -5105,7 +5105,7 @@ async function getSourcePreviewPageBlob(pageNum) {
       context.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: context, viewport }).promise;
       return await new Promise((resolve, reject) => {
-        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("无法生成预览页图")), "image/png");
+        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("无法生成预览页图")), "image/jpeg", 0.92);
       });
     } catch (error) {
       if (state.pdfDoc !== pdfDoc) throw error;
@@ -6572,8 +6572,9 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
     const image = await getSourcePreviewPageBlob(context.pageNum);
     if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
     const data = new FormData();
-    data.append("file", image, makePageImageName());
+    data.append("file", image, image.type === "image/jpeg" ? "source-preview.jpg" : makePageImageName());
     data.append("bbox", JSON.stringify(sourceLine.bbox));
+    data.append("preview_format", "jpeg");
     const profileId = typeof context.profile === "string" ? context.profile : context.profile?.id;
     if (profileId === "traditional" && !["left", "right", "左侧", "右侧"].includes(sourceLine.regionId || sourceLine.regionLabel)) {
       const rowIndex = Number.isInteger(sourceLine.sourceRowIndex) ? sourceLine.sourceRowIndex
