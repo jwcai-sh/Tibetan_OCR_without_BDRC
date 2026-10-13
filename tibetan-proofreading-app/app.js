@@ -1264,7 +1264,7 @@ async function initializeCloudLibrary() {
     }
     if (config.enabled) {
       document.getElementById("cloudLibraryAuthTitle").textContent = "协作者登录";
-      document.getElementById("cloudLibraryAuthHint").textContent = "选择姓名并输入共用口令；逐页任务分工和修改历史保存在阿里云数据库。";
+      document.getElementById("cloudLibraryAuthHint").textContent = "选择姓名登录；测试阶段可不填口令，逐页任务分工和修改历史保存在阿里云数据库。";
       const meResponse = await fetch(`${window.location.origin}/api/collaboration/me`, { credentials: "same-origin" });
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
     } else {
@@ -1290,7 +1290,7 @@ async function initializeCloudLibrary() {
 
 async function unlockCloudLibrary() {
   const token = (els.collabHeaderPassword?.value || els.cloudLibraryPassword?.value || "").trim();
-  if (!token) {
+  if (cloudLibrary.authMode !== "collaboration" && !token) {
     setCloudLibraryStatus("请输入文档访问口令。", true);
     return;
   }

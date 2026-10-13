@@ -70,6 +70,10 @@ class CollaborationPostgresTests(unittest.TestCase):
         for key in ("COLLAB_DB_HOST", "COLLAB_DB_PORT", "COLLAB_DB_NAME", "COLLAB_DB_USER", "COLLAB_DB_PASSWORD", "COLLAB_DB_SCHEMA", "COLLABORATOR_NAMES", "COLLABORATION_PASSWORD", "COLLAB_SESSION_SECRET"):
             os.environ.pop(key, None)
 
+    def test_password_is_optional_for_test_login(self):
+        os.environ["COLLABORATION_PASSWORD"] = ""
+        self.assertTrue(self.collaboration.configured())
+
     def test_connect_uses_postgres_and_schema(self):
         self.collaboration._connect()
         self.assertEqual(self.calls[0]["dbname"], "ocr_workbench")

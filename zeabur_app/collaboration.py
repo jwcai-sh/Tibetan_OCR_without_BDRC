@@ -1,7 +1,8 @@
 """Opt-in Aliyun RDS collaboration store for the OCR workbench.
 
-The database is enabled only when every COLLAB_DB_* value and the shared
-login settings are present. OSS remains the source-file store and bootstrap.
+The database is enabled when the database connection, collaborator names,
+and session secret are present. COLLABORATION_PASSWORD is optional for a
+controlled test deployment; an empty value means name-only login. OSS remains the source-file store and bootstrap.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ def _env(name: str) -> str:
 def configured() -> bool:
     return all(_env(name) for name in (
         "COLLAB_DB_HOST", "COLLAB_DB_NAME", "COLLAB_DB_USER", "COLLAB_DB_PASSWORD",
-        "COLLABORATOR_NAMES", "COLLABORATION_PASSWORD", "COLLAB_SESSION_SECRET",
+        "COLLABORATOR_NAMES", "COLLAB_SESSION_SECRET",
     ))
 
 
@@ -116,7 +117,8 @@ def _initialize_schema() -> None:
 
 def issue_session(name: str, password: str, response: Response, request: Request) -> None:
     valid_name = next((item for item in collaborators() if hmac.compare_digest(item, name)), None)
-    if not valid_name or not hmac.compare_digest(password, _env("COLLABORATION_PASSWORD")):
+    shared_password = _env("COLLABORATION_PASSWORD")
+    if not valid_name or (shared_password and not hmac.compare_digest(password, shared_password)):
         raise HTTPException(401, "姓名或协作口令不正确")
     expires = int(time.time()) + 12 * 60 * 60
     body = base64.urlsafe_b64encode(json.dumps({"name": valid_name, "exp": expires}, separators=(",", ":")).encode()).decode().rstrip("=")
