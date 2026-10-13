@@ -25,7 +25,10 @@ def call_ai_layout(image: bytes, line_count: int) -> dict[str, Any]:
     return load_ai_ocr_module().build_layout_payload(image, line_count)
 
 
-def call_ai_line_preview(image: bytes, bbox: str, review_image: str = "") -> dict[str, Any]:
+def call_ai_line_preview(
+    image: bytes, bbox: str, review_image: str = "",
+    physical_row_index: str = "", physical_row_count: str = "",
+) -> dict[str, Any]:
     import base64
     import json
     from io import BytesIO
@@ -33,6 +36,16 @@ def call_ai_line_preview(image: bytes, bbox: str, review_image: str = "") -> dic
 
     module = load_ai_ocr_module()
     parsed_bbox = module.parse_normalized_bbox(bbox)
+    expected_count = None
+    if physical_row_index:
+        row_index = int(physical_row_index)
+        if row_index < 0:
+            raise ValueError("physical_row_index must be a non-negative integer")
+        parsed_bbox["physical_row_index"] = row_index
+    if physical_row_count:
+        expected_count = int(physical_row_count)
+        if expected_count < 1:
+            raise ValueError("physical_row_count must be a positive integer")
     metadata = json.loads(review_image or "{}")
     if metadata:
         with Image.open(BytesIO(image)) as source:
@@ -40,6 +53,12 @@ def call_ai_line_preview(image: bytes, bbox: str, review_image: str = "") -> dic
                 parsed_bbox, metadata, {"width": source.width, "height": source.height}
             )
     tiles, crop_metadata = module.prepare_line_review_images(image, parsed_bbox)
+    resolved_bbox = crop_metadata.get("source_bbox", {})
+    if expected_count is not None and (
+        resolved_bbox.get("physical_row_count") != expected_count
+        or resolved_bbox.get("physical_row_index") != parsed_bbox.get("physical_row_index")
+    ):
+        raise RuntimeError("原文物理行数与识别 block 数不一致，无法安全生成对应的单行预览。")
     return {
         "images": ["data:image/png;base64," + base64.b64encode(tile).decode("ascii") for tile in tiles],
         "review_image": crop_metadata,

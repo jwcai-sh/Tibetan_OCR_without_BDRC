@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261013-fast-line-preview";
+const APP_BUILD_ID = "20261013-fast-line-preview-v2";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -6546,7 +6546,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
     const endpoint = getAiVisionLineReviewEndpoint().replace(/line-review$/, "line-preview");
     const response = await fetch(endpoint, { method: "POST", body: data });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(payload.error || payload.detail || `HTTP ${response.status}`);
     if (payload.review_image?.crop_version !== 26) throw new Error("裁剪服务尚未更新，请重启本地服务后重试");
     const entry = { payload, savedAt: new Date().toISOString(), context, modelInputs: cached?.modelInputs || {}, ...(cached?.modelInput ? { modelInput: cached.modelInput } : {}) };
     try { await accessLineCropCache(key, entry); }
@@ -6586,7 +6586,7 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
     const endpoint = context.endpoint.replace(/line-review$/, "line-preview");
     const response = await fetch(endpoint, { method: "POST", body: data });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(payload.error || payload.detail || `HTTP ${response.status}`);
     if (payload.review_image?.crop_version !== 26 || !payload.images?.length) {
       throw new Error("单行原文裁剪格式无效");
     }
