@@ -1162,18 +1162,36 @@ async function resumeRemoteProject(project, workflow = "ocr") {
   setStatus(`正在恢复云端项目“${project.sourceName}”...`, "warn");
   try {
     const baseUrl = window.location.origin;
-    const [sourceResponse, stateResponse] = await Promise.all([
-      fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source`),
+    const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source`;
+    const sourcePromise = findCachedRemoteSource(project).then(async (cached) => {
+      if (cached) return cached;
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
+      const blob = await response.blob();
+      return new File([blob], project.sourceName || "远程项目.pdf", {
+        type: blob.type || project.sourceMime || "application/pdf",
+      });
+    });
+    let [sourceFile, stateResponse] = await Promise.all([
+      sourcePromise,
       fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`),
     ]);
-    if (!sourceResponse.ok) throw new Error(`源文件 HTTP ${sourceResponse.status}`);
     const remoteState = await stateResponse.json().catch(() => ({}));
     if (!stateResponse.ok) throw new Error(remoteState.detail || `状态 HTTP ${stateResponse.status}`);
-    const sourceBlob = await sourceResponse.blob();
-    const sourceName = project.sourceName || remoteState.sourceName || remoteState.name || "远程项目.pdf";
-    const sourceFile = new File([sourceBlob], sourceName, {
-      type: sourceBlob.type || project.sourceMime || remoteState.content_type || "application/pdf",
-    });
+    const sourceName = remoteState.sourceName || remoteState.name || project.sourceName || sourceFile.name;
+    if (remoteState.size && sourceFile.size !== Number(remoteState.size)) {
+      const response = await fetch(sourceUrl);
+      if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
+      const blob = await response.blob();
+      sourceFile = new File([blob], sourceName, {
+        type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf",
+      });
+    }
+    if (sourceFile.name !== sourceName || sourceFile.type !== (remoteState.content_type || sourceFile.type)) {
+      sourceFile = new File([sourceFile], sourceName, {
+        type: remoteState.content_type || sourceFile.type || project.sourceMime || "application/pdf",
+      });
+    }
     const cacheKey = makeCacheKey(sourceFile);
     window.localStorage.setItem(cacheKey, JSON.stringify({
       sourceName,
@@ -1191,6 +1209,20 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
   } catch (error) {
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
+  }
+}
+
+async function findCachedRemoteSource(project) {
+  const cachedProject = project.cacheKey
+    ? project
+    : getHomeProjects().find((item) => item.remoteBookId === project.remoteBookId);
+  if (!cachedProject?.cacheKey || cachedProject.remoteBookId !== project.remoteBookId) return null;
+  try {
+    const file = await getStoredSourceFile(cachedProject.cacheKey);
+    return file instanceof File && makeCacheKey(file) === cachedProject.cacheKey ? file : null;
+  } catch (error) {
+    console.warn("Failed to read cached remote source", error);
+    return null;
   }
 }
 
@@ -6379,6 +6411,26 @@ function renderSourcePreviewScaleButton(action, icon, label) {
 
 const lineCropRequests = new Map();
 const lineCropModelWrites = new Map();
+const linePreviewQueue = [];
+let activeLinePreviews = 0;
+
+function queueLinePreview(task) {
+  linePreviewQueue.push(task);
+  drainLinePreviewQueue();
+}
+
+function drainLinePreviewQueue() {
+  while (activeLinePreviews < 2 && linePreviewQueue.length) {
+    const next = linePreviewQueue.shift();
+    activeLinePreviews += 1;
+    Promise.resolve().then(next).catch((error) => {
+      console.warn("Failed to prepare line preview", error);
+    }).finally(() => {
+      activeLinePreviews -= 1;
+      drainLinePreviewQueue();
+    });
+  }
+}
 
 function makeLineCropContext() {
   return { cacheKey: state.cacheKey, pageNum: state.pageNum,
@@ -6530,7 +6582,7 @@ function createModelInputPreview(sourceLine, index) {
   const sourceKey = state.cacheKey;
   const load = async () => {
     try {
-      if (pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
+      if (!wrapper.isConnected || pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
       const result = state.ocrResults.get(pageNum);
       const compare = getOcrSourceCompare(result);
       const metadata = compare?.llm?.lines?.[index]?.reviewImage || sourceLine.reviewImage;
@@ -6584,10 +6636,19 @@ function createModelInputPreview(sourceLine, index) {
         mergeDuplicateSourcePreviews(wrapper.closest("#ocrLineCompare"));
       }
     } catch (error) {
-      wrapper.textContent = `裁剪预览失败：${error.message}`;
+      if (wrapper.isConnected) wrapper.textContent = `裁剪预览失败：${error.message}`;
     }
   };
-  window.setTimeout(() => { if (wrapper.isConnected) void load(); }, 0);
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      queueLinePreview(load);
+    }, { rootMargin: "240px 0px" });
+    observer.observe(wrapper);
+  } else {
+    window.setTimeout(() => queueLinePreview(load), 0);
+  }
   return wrapper;
 }
 

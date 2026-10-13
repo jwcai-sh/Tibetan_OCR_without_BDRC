@@ -15,7 +15,7 @@ from urllib.parse import quote
 import oss2
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -212,14 +212,29 @@ def get_book_source(book_id: str) -> Response:
     if not source_key:
         raise HTTPException(404, "书籍源文件不存在")
     try:
-        body = oss_bucket().get_object(source_key).read()
+        source = oss_bucket().get_object(source_key)
     except oss2.exceptions.NoSuchKey as exc:
         raise HTTPException(404, "书籍源文件不存在") from exc
     safe_name = Path(str(metadata.get("name") or "source.pdf")).name
-    return Response(
-        content=body,
+    def chunks():
+        try:
+            while chunk := source.read(1024 * 1024):
+                yield chunk
+        finally:
+            close = getattr(source, "close", None)
+            if close:
+                close()
+
+    headers = {
+        "Content-Disposition": f"attachment; filename=source; filename*=UTF-8''{quote(safe_name)}",
+        "Cache-Control": "private, max-age=3600",
+    }
+    if int(metadata.get("size") or 0) > 0:
+        headers["Content-Length"] = str(metadata["size"])
+    return StreamingResponse(
+        chunks(),
         media_type=str(metadata.get("content_type") or "application/octet-stream"),
-        headers={"Content-Disposition": f"attachment; filename=source; filename*=UTF-8''{quote(safe_name)}"},
+        headers=headers,
     )
 
 
