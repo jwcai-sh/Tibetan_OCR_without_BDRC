@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261013-fast-line-preview-v3";
+const APP_BUILD_ID = "20261013-collaboration-rds-v1";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -203,6 +203,8 @@ const state = {
   batchOcr: null,
   isTranslateBusy: false,
   remoteBookId: "",
+  remotePageRevisions: {},
+  remotePageSnapshots: {},
   remoteSaveTimer: null,
   layoutHydrationInFlight: new Map(),
   activeProjectRestoreInFlight: false,
@@ -210,6 +212,9 @@ const state = {
 
 const cloudLibrary = {
   token: "",
+  authMode: "legacy",
+  actor: "",
+  names: [],
   items: [],
   path: "",
   loaded: false,
@@ -259,6 +264,10 @@ function cacheElements() {
     "cloudLibraryRefreshButton",
     "cloudLibraryAuth",
     "cloudLibraryPassword",
+    "collaboratorName",
+    "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout",
+    "collaborationPanel", "collabPageNumber", "collabFirstAssignee", "collabFirstStatus",
+    "collabSecondAssignee", "collabSecondStatus", "collabSaveAssignment", "collabShowHistory", "collabLogout", "collabFeedback",
     "cloudLibraryUnlockButton",
     "cloudLibraryStatus",
     "cloudLibraryFiles",
@@ -395,6 +404,11 @@ function wireEvents() {
   bindOptionalClick("homeRefreshProjectsButton", () => renderHomeDashboard());
   bindOptionalClick("cloudLibraryRefreshButton", () => void refreshCloudLibrary());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
+  bindOptionalClick("collabSaveAssignment", () => void savePageAssignments());
+  bindOptionalClick("collabShowHistory", () => void showPageHistory());
+  bindOptionalClick("collabLogout", () => void logoutCollaboration());
+  bindOptionalClick("collabHeaderLogin", () => void unlockCloudLibrary());
+  bindOptionalClick("collabHeaderLogout", () => void logoutCollaboration());
   els.cloudLibraryPassword?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") void unlockCloudLibrary();
   });
@@ -1208,10 +1222,13 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     state.remoteRestoreInFlight = true;
     try {
       await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+      state.remotePageRevisions = remoteState.page_revisions || {};
+      state.remotePageSnapshots = makeRemotePageSnapshots(remoteState);
     } finally {
       state.remoteRestoreInFlight = false;
     }
     setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
+    void refreshCollaborationPage();
   } catch (error) {
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
@@ -1231,26 +1248,71 @@ async function findCachedRemoteSource(project) {
   }
 }
 
-function initializeCloudLibrary() {
+async function initializeCloudLibrary() {
   if (!els.cloudLibrary) return;
   els.cloudLibrary.hidden = !isCloudDeployment();
   if (!isCloudDeployment()) return;
   try {
-    cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || "";
+    const response = await fetch(`${window.location.origin}/api/collaboration/config`);
+    const config = await response.json();
+    cloudLibrary.authMode = config.enabled ? "collaboration" : "legacy";
+    cloudLibrary.names = Array.isArray(config.names) ? config.names : [];
+    const nameSelect = document.getElementById("collaboratorName");
+    for (const select of [nameSelect, els.collabHeaderName]) if (select) {
+      select.replaceChildren(...cloudLibrary.names.map((name) => new Option(name, name)));
+      select.hidden = !config.enabled;
+    }
+    if (config.enabled) {
+      document.getElementById("cloudLibraryAuthTitle").textContent = "协作者登录";
+      document.getElementById("cloudLibraryAuthHint").textContent = "选择姓名并输入共用口令；逐页任务分工和修改历史保存在阿里云数据库。";
+      const meResponse = await fetch(`${window.location.origin}/api/collaboration/me`, { credentials: "same-origin" });
+      if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
+    } else {
+      try { cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.token = ""; }
+    }
   } catch (_) {
-    cloudLibrary.token = "";
+    try { cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.token = ""; }
   }
-  els.cloudLibraryAuth.hidden = Boolean(cloudLibrary.token);
+  els.cloudLibraryAuth.hidden = cloudLibrary.authMode === "collaboration" ? Boolean(cloudLibrary.actor) : Boolean(cloudLibrary.token);
   els.cloudLibraryFiles.hidden = true;
+  const panel = document.getElementById("collaborationPanel");
+  if (panel) panel.hidden = cloudLibrary.authMode !== "collaboration";
+  els.collaborationLoginBar.hidden = cloudLibrary.authMode !== "collaboration";
+  els.collaborationActorLabel.textContent = cloudLibrary.actor ? `协作者：${cloudLibrary.actor}` : "";
+  els.collabHeaderName.hidden = Boolean(cloudLibrary.actor);
+  els.collabHeaderPassword.hidden = Boolean(cloudLibrary.actor);
+  els.collabHeaderLogin.hidden = Boolean(cloudLibrary.actor);
+  els.collabHeaderLogout.hidden = !cloudLibrary.actor;
+  if (cloudLibrary.authMode === "collaboration") els.cloudLibraryAuth.hidden = true;
+  populateAssigneeSelects();
+  if (cloudLibrary.actor) void refreshCloudLibrary();
 }
 
 async function unlockCloudLibrary() {
-  const token = els.cloudLibraryPassword?.value.trim() || "";
+  const token = (els.collabHeaderPassword?.value || els.cloudLibraryPassword?.value || "").trim();
   if (!token) {
     setCloudLibraryStatus("请输入文档访问口令。", true);
     return;
   }
-  cloudLibrary.token = token;
+  if (cloudLibrary.authMode === "collaboration") {
+    try {
+      const response = await fetch(`${window.location.origin}/api/collaboration/login`, {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: els.collabHeaderName?.value || document.getElementById("collaboratorName")?.value || "", password: token }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+      cloudLibrary.actor = payload.name;
+      els.collaborationActorLabel.textContent = `协作者：${cloudLibrary.actor}`;
+      els.collabHeaderName.hidden = true; els.collabHeaderPassword.hidden = true; els.collabHeaderLogin.hidden = true; els.collabHeaderLogout.hidden = false;
+      els.collabHeaderPassword.value = "";
+      els.cloudLibraryAuth.hidden = true;
+      document.getElementById("collaborationPanel").hidden = false;
+      populateAssigneeSelects();
+      void restoreRouteFromLocation();
+    } catch (error) { setCloudLibraryStatus(`登录失败：${error.message || error}`, true); return; }
+  } else cloudLibrary.token = token;
+  els.cloudLibraryPassword.value = "";
   await refreshCloudLibrary();
 }
 
@@ -1263,7 +1325,7 @@ function setCloudLibraryStatus(message, isError = false) {
 
 async function refreshCloudLibrary() {
   if (!isCloudDeployment() || cloudLibrary.loading) return;
-  if (!cloudLibrary.token) {
+  if (!cloudLibrary.token && !(cloudLibrary.authMode === "collaboration" && cloudLibrary.actor)) {
     els.cloudLibraryAuth.hidden = false;
     els.cloudLibraryFiles.hidden = true;
     return;
@@ -1271,14 +1333,13 @@ async function refreshCloudLibrary() {
   cloudLibrary.loading = true;
   setCloudLibraryStatus("正在读取云端目录…");
   try {
-    const response = await fetch(`${window.location.origin}/api/library`, {
-      headers: { Authorization: `Bearer ${cloudLibrary.token}` },
-    });
+    const headers = cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {};
+    const response = await fetch(`${window.location.origin}/api/library`, { credentials: "same-origin", headers });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(payload.detail || `HTTP ${response.status}`), { status: response.status });
     cloudLibrary.items = Array.isArray(payload.items) ? payload.items.filter((item) => typeof item.path === "string") : [];
     cloudLibrary.loaded = true;
-    try { window.sessionStorage.setItem(CLOUD_LIBRARY_SESSION_KEY, cloudLibrary.token); } catch (_) { /* Session storage can be unavailable. */ }
+    if (cloudLibrary.authMode === "legacy") try { window.sessionStorage.setItem(CLOUD_LIBRARY_SESSION_KEY, cloudLibrary.token); } catch (_) { /* Session storage can be unavailable. */ }
     els.cloudLibraryPassword.value = "";
     els.cloudLibraryAuth.hidden = true;
     els.cloudLibraryFiles.hidden = false;
@@ -1288,15 +1349,99 @@ async function refreshCloudLibrary() {
   } catch (error) {
     if (error.status === 401) {
       cloudLibrary.token = "";
+      cloudLibrary.actor = "";
       cloudLibrary.loaded = false;
       try { window.sessionStorage.removeItem(CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
       els.cloudLibraryAuth.hidden = false;
       els.cloudLibraryFiles.hidden = true;
+      if (cloudLibrary.authMode === "collaboration") {
+        els.collaborationActorLabel.textContent = "";
+        els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = false; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
+      }
     }
     setCloudLibraryStatus(`云端目录读取失败：${error.message || error}`, true);
   } finally {
     cloudLibrary.loading = false;
   }
+}
+
+function populateAssigneeSelects() {
+  for (const id of ["collabFirstAssignee", "collabSecondAssignee"]) {
+    const select = els[id];
+    if (!select) continue;
+    const selected = select.value;
+    select.replaceChildren(new Option("未分配", ""), ...cloudLibrary.names.map((name) => new Option(name, name)));
+    select.value = cloudLibrary.names.includes(selected) ? selected : "";
+  }
+}
+
+function setCollaborationFeedback(message, isError = false) {
+  if (!els.collabFeedback) return;
+  els.collabFeedback.textContent = message;
+  els.collabFeedback.classList.toggle("is-error", isError);
+}
+
+async function refreshCollaborationPage() {
+  if (cloudLibrary.authMode !== "collaboration" || !state.remoteBookId || !els.collaborationPanel || els.collaborationPanel.hidden) return;
+  els.collabPageNumber.textContent = String(state.pageNum);
+  els.collabFirstAssignee.value = ""; els.collabFirstStatus.value = "todo";
+  els.collabSecondAssignee.value = ""; els.collabSecondStatus.value = "todo";
+  try {
+    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/assignments`, { credentials: "same-origin" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    for (const row of payload.items || []) {
+      if (Number(row.page_num) !== state.pageNum) continue;
+      const suffix = row.stage === "first" ? "First" : "Second";
+      els[`collab${suffix}Assignee`].value = row.assignee || "";
+      els[`collab${suffix}Status`].value = row.status || "todo";
+    }
+  } catch (error) { setCollaborationFeedback(`读取分工失败：${error.message || error}`, true); }
+}
+
+async function savePageAssignments() {
+  if (!state.remoteBookId) return setCollaborationFeedback("请先打开一本文档。", true);
+  const updates = [
+    { stage: "first", assignee: els.collabFirstAssignee.value || null, status: els.collabFirstStatus.value },
+    { stage: "second", assignee: els.collabSecondAssignee.value || null, status: els.collabSecondStatus.value },
+  ];
+  try {
+    for (const update of updates) {
+      const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/assignments`, {
+        method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page_num: state.pageNum, ...update }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    setCollaborationFeedback(`第 ${state.pageNum} 页分工已保存。`);
+    void refreshCollaborationPage();
+  } catch (error) { setCollaborationFeedback(`保存分工失败：${error.message || error}`, true); }
+}
+
+async function showPageHistory() {
+  if (!state.remoteBookId) return setCollaborationFeedback("请先打开一本文档。", true);
+  try {
+    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/history/${state.pageNum}`, { credentials: "same-origin" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    const rows = payload.items || [];
+    setCollaborationFeedback(rows.length ? rows.map((row) => `${row.created_at} · ${row.actor} · ${row.event_type}`).join("\n") : "本页暂无修改记录。");
+    if (rows.length) window.alert(rows.map((row) => `${row.created_at}\n${row.actor} · ${row.event_type}\n修改前：${JSON.stringify(row.before)}\n修改后：${JSON.stringify(row.after)}`).join("\n\n"));
+  } catch (error) { setCollaborationFeedback(`读取历史失败：${error.message || error}`, true); }
+}
+
+async function logoutCollaboration() {
+  await fetch(`${window.location.origin}/api/collaboration/logout`, { method: "POST", credentials: "same-origin" }).catch(() => {});
+  cloudLibrary.actor = "";
+  cloudLibrary.loaded = false;
+  els.cloudLibraryAuth.hidden = false;
+  els.cloudLibraryFiles.hidden = true;
+  els.collaborationPanel.hidden = true;
+  els.collaborationActorLabel.textContent = "";
+  els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = false; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
+  els.cloudLibraryAuth.hidden = false;
+  setCloudLibraryStatus("已退出协作登录。");
 }
 
 function renderCloudLibraryRows() {
@@ -1388,7 +1533,8 @@ async function openCloudLibraryFile(file) {
   try {
     const response = await fetch(`${window.location.origin}/api/library/open`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cloudLibrary.token}` },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", ...(cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {}) },
       body: JSON.stringify({ path: file.path }),
     });
     const book = await response.json().catch(() => ({}));
@@ -2676,6 +2822,8 @@ async function createRemoteBook(file) {
     throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
   }
   state.remoteBookId = payload.book_id;
+  state.remotePageRevisions = {};
+  state.remotePageSnapshots = {};
   const url = new URL(window.location.href);
   url.searchParams.set("book_id", state.remoteBookId);
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -2688,6 +2836,7 @@ function scheduleRemoteStateSave(payload, immediate = false) {
   const save = async () => {
     state.remoteSaveTimer = null;
     try {
+      const changedPages = findChangedRemotePages(payload, state.remotePageSnapshots);
       const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2696,19 +2845,54 @@ function scheduleRemoteStateSave(payload, immediate = false) {
           book_id: bookId,
           ocr_results: payload.ocrResults,
           translation_results: payload.translationResults,
+          base_page_revisions: state.remotePageRevisions || {},
+          changed_pages: changedPages,
         }),
       });
+      const responsePayload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        throw new Error(errorPayload.detail || `HTTP ${response.status}`);
+        const detail = typeof responsePayload.detail === "object" ? responsePayload.detail.message : responsePayload.detail;
+        if (response.status === 409 && Array.isArray(responsePayload.detail?.pages)) {
+          throw new Error(`第 ${responsePayload.detail.pages.join("、")} 页有其他协作者的新修改，请重新加载后复核；本地内容已保留。`);
+        }
+        throw new Error(detail || `HTTP ${response.status}`);
       }
+      state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
+      for (const page of changedPages) state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
     } catch (error) {
       console.warn("Failed to save remote OCR state", error);
       setStatus(`本地已保存，但云端校对状态同步失败：${error.message || error}`, "warn");
+      if (String(error.message || error).includes("重新加载后复核")) setCollaborationFeedback(error.message || String(error), true);
     }
   };
   if (immediate) return save();
   state.remoteSaveTimer = window.setTimeout(save, 500);
+}
+
+function remotePageFingerprint(payload, page) {
+  const reviews = Array.isArray(payload.ocrQualityReviews)
+    ? payload.ocrQualityReviews.filter((row) => String(row.pageNum ?? row.page_num ?? "") === String(page))
+    : (payload.ocrQualityReviews?.[page] || []);
+  return JSON.stringify({
+    ocr: (payload.ocrResults || payload.ocr_results || {})[page] ?? null,
+    translation: (payload.translationResults || payload.translation_results || {})[page] ?? null,
+    reviews,
+  });
+}
+
+function makeRemotePageSnapshots(payload) {
+  const maps = [payload.ocr_results || payload.ocrResults || {}, payload.translation_results || payload.translationResults || {}];
+  const pages = new Set(maps.flatMap((map) => Object.keys(map)));
+  const reviews = payload.ocrQualityReviews || payload.ocr_quality_reviews || [];
+  if (Array.isArray(reviews)) reviews.forEach((row) => { const page = row.pageNum ?? row.page_num; if (page != null) pages.add(String(page)); });
+  else if (reviews && typeof reviews === "object") Object.keys(reviews).forEach((page) => pages.add(page));
+  return Object.fromEntries([...pages].map((page) => [page, remotePageFingerprint(payload, page)]));
+}
+
+function findChangedRemotePages(payload, snapshots) {
+  const current = makeRemotePageSnapshots(payload);
+  const pages = new Set([...Object.keys(current), ...Object.keys(snapshots || {})]);
+  return [...pages].filter((page) => current[page] !== (snapshots || {})[page]).sort((a, b) => Number(a) - Number(b));
 }
 
 function serializeResultMap(map) {
@@ -3359,6 +3543,7 @@ async function goToPage(pageNum, options = {}) {
     return;
   }
   state.pageNum = nextPage;
+  void refreshCollaborationPage();
   clearSourceLineHighlight();
   await renderCurrentPage();
   scheduleIdleWork(() => primeCurrentPageDirectText("page"));

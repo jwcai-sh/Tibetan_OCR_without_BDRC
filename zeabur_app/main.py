@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_ocr, call_ai_page_review, call_ai_review_models
 from tibetan_translation_bridge import call_translation
+from zeabur_app import collaboration
 
 
 def env(name: str, default: str = "") -> str:
@@ -100,6 +101,46 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def collaboration_auth(request: Request, call_next):
+    public_paths = {"/api/collaboration/config", "/api/collaboration/login", "/api/collaboration/logout", "/api/collaboration/me"}
+    if collaboration.configured() and request.url.path.startswith("/api/") and request.url.path not in public_paths and request.method != "OPTIONS":
+        try:
+            request.state.collaborator = collaboration.current_actor(request)
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return await call_next(request)
+
+
+@app.get("/api/collaboration/config")
+def collaboration_config() -> dict[str, Any]:
+    return {"enabled": collaboration.configured(), "names": collaboration.collaborators() if collaboration.configured() else []}
+
+
+@app.post("/api/collaboration/login")
+async def collaboration_login(request: Request) -> Response:
+    if not collaboration.configured():
+        raise HTTPException(503, "多人协作尚未配置阿里云数据库及登录环境变量")
+    payload = await request.json()
+    response = JSONResponse({"ok": True, "name": str(payload.get("name") or "")})
+    collaboration.issue_session(str(payload.get("name") or ""), str(payload.get("password") or ""), response, request)
+    return response
+
+
+@app.post("/api/collaboration/logout")
+def collaboration_logout() -> Response:
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("tibetan_collab", path="/")
+    return response
+
+
+@app.get("/api/collaboration/me")
+def collaboration_me(request: Request) -> dict[str, Any]:
+    if not collaboration.configured():
+        return {"enabled": False, "name": ""}
+    return {"enabled": True, "name": collaboration.current_actor(request)}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     oss_configured = all((OSS_ENDPOINT, OSS_BUCKET, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET))
@@ -111,12 +152,14 @@ def health() -> dict[str, Any]:
         "ai_ocr": {"configured": bool(env("MODEL_AGGREGATOR_BASE_URL") or env("AI_VISION_BASE_URL"))},
         "pdf_render": {"provider": "pymupdf"},
         "translation": {"provider": env("TRANSLATE_PROVIDER", "model_aggregator")},
+        "collaboration": {"configured": collaboration.configured(), "database": "aliyun-rds-mysql" if collaboration.configured() else "not-configured"},
     }
 
 
 @app.get("/api/library")
-def list_library(authorization: str = Header(default="")) -> dict[str, Any]:
-    require_library_access(authorization)
+def list_library(request: Request, authorization: str = Header(default="")) -> dict[str, Any]:
+    if not collaboration.configured():
+        require_library_access(authorization)
     items = []
     truncated = False
     for obj in oss2.ObjectIterator(oss_bucket(), prefix=LIBRARY_PREFIX, max_keys=100):
@@ -137,7 +180,8 @@ def list_library(authorization: str = Header(default="")) -> dict[str, Any]:
 
 @app.post("/api/library/open")
 async def open_library_book(request: Request, authorization: str = Header(default="")) -> dict[str, Any]:
-    require_library_access(authorization)
+    if not collaboration.configured():
+        require_library_access(authorization)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(400, "文档请求必须为 JSON object")
@@ -175,7 +219,7 @@ async def open_library_book(request: Request, authorization: str = Header(defaul
 
 
 @app.post("/api/books")
-async def create_book(file: UploadFile = File(...)) -> dict[str, Any]:
+async def create_book(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
     content = await file.read()
     if not content:
         raise HTTPException(400, "上传文件为空")
@@ -202,11 +246,13 @@ async def create_book(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.get("/api/books/{book_id}/state")
 def get_book_state(book_id: str) -> dict[str, Any]:
+    if collaboration.configured():
+        return collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
     return read_json(book_id, "state.json")
 
 
 @app.get("/api/books/{book_id}/source")
-def get_book_source(book_id: str) -> Response:
+def get_book_source(book_id: str, request: Request) -> Response:
     metadata = read_json(book_id, "metadata.json")
     source_key = str(metadata.get("source_key") or "")
     if not source_key:
@@ -245,8 +291,33 @@ async def put_book_state(book_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(400, "状态必须是 JSON object")
     payload["book_id"] = book_id
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if collaboration.configured():
+        collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+        return collaboration.save_state(book_id, payload, collaboration.current_actor(request))
     write_json(book_id, "state.json", payload)
     return {"ok": True, "book_id": book_id, "updated_at": payload["updated_at"]}
+
+
+@app.get("/api/books/{book_id}/assignments")
+def get_assignments(book_id: str) -> dict[str, Any]:
+    if not collaboration.configured():
+        raise HTTPException(503, "多人协作尚未配置")
+    return {"items": collaboration.assignments(book_id)}
+
+
+@app.put("/api/books/{book_id}/assignments")
+async def put_assignment(book_id: str, request: Request) -> dict[str, Any]:
+    if not collaboration.configured():
+        raise HTTPException(503, "多人协作尚未配置")
+    payload = await request.json()
+    return collaboration.set_assignment(book_id, int(payload.get("page_num") or 0), str(payload.get("stage") or ""), payload.get("assignee"), str(payload.get("status") or "todo"), collaboration.current_actor(request))
+
+
+@app.get("/api/books/{book_id}/history/{page_num}")
+def get_page_history(book_id: str, page_num: int) -> dict[str, Any]:
+    if not collaboration.configured():
+        raise HTTPException(503, "多人协作尚未配置")
+    return {"items": collaboration.history(book_id, page_num)}
 
 
 @app.post("/api/books/{book_id}/exports")

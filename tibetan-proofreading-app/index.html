@@ -7,10 +7,10 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>藏文典籍翻译工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20261013-preview-scale-controls" />
+    <link rel="stylesheet" href="./styles.css?v=20261013-collaboration-rds-v1" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261013-fast-line-preview-v3" defer></script>
+    <script src="./app.js?v=20261013-collaboration-rds-v1" defer></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -22,6 +22,13 @@
           </div>
         </div>
         <div class="project-actions" aria-label="项目操作">
+          <div id="collaborationLoginBar" class="collaboration-login-bar" hidden>
+            <span id="collaborationActorLabel"></span>
+            <select id="collabHeaderName" aria-label="协作者姓名"></select>
+            <input id="collabHeaderPassword" type="password" autocomplete="current-password" placeholder="共用口令" aria-label="协作共用口令" />
+            <button id="collabHeaderLogin" class="primary-button compact" type="button">登录协作</button>
+            <button id="collabHeaderLogout" class="ghost-button compact" type="button" hidden>退出</button>
+          </div>
           <button id="homeButton" class="ghost-button compact workbench-only-action" type="button">
             <i data-lucide="layout-dashboard"></i>
             <span>主页</span>
@@ -106,7 +113,8 @@
             <div class="finder-main">
               <div id="cloudLibraryAuth" class="finder-auth">
                 <i data-lucide="lock-keyhole"></i>
-                <div><strong>云端目录已保护</strong><p>输入 Zeabur 服务的文档访问口令后，查看私有 OSS 文件。</p></div>
+                <div><strong id="cloudLibraryAuthTitle">云端目录已保护</strong><p id="cloudLibraryAuthHint">输入 Zeabur 服务的文档访问口令后，查看私有 OSS 文件。</p></div>
+                <select id="collaboratorName" aria-label="协作者姓名" hidden></select>
                 <input id="cloudLibraryPassword" type="password" autocomplete="off" placeholder="访问口令" aria-label="云端文档访问口令" />
                 <button id="cloudLibraryUnlockButton" class="primary-button compact" type="button">解锁</button>
               </div>
@@ -359,6 +367,18 @@
             </button>
             </div>
           </div>
+
+          <section id="collaborationPanel" class="collaboration-panel" hidden aria-label="多人协作任务">
+            <strong>多人协作 · 第 <span id="collabPageNumber">1</span> 页</strong>
+            <label>一校 <select id="collabFirstAssignee"></select></label>
+            <label>状态 <select id="collabFirstStatus"><option value="todo">待处理</option><option value="doing">处理中</option><option value="done">已完成</option></select></label>
+            <label>二校 <select id="collabSecondAssignee"></select></label>
+            <label>状态 <select id="collabSecondStatus"><option value="todo">待处理</option><option value="doing">处理中</option><option value="done">已完成</option></select></label>
+            <button id="collabSaveAssignment" class="ghost-button compact" type="button">保存分工</button>
+            <button id="collabShowHistory" class="ghost-button compact" type="button">查看本页修改历史</button>
+            <button id="collabLogout" class="ghost-button compact" type="button">退出协作</button>
+            <span id="collabFeedback" role="status"></span>
+          </section>
 
           <div id="ocrLineCompare" class="ocr-line-compare" aria-label="Gemini Vision OCR 逐行校对"></div>
 

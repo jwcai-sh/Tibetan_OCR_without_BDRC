@@ -252,6 +252,17 @@ button {
   display: none;
 }
 
+.collaboration-panel { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--line, #d8e2dc); background:#f4faf6; font-size:13px; }
+.collaboration-login-bar { display:flex; align-items:center; gap:6px; }
+.collaboration-login-bar[hidden] { display:none; }
+.collaboration-login-bar input { width:128px; min-width:90px; }
+.collaboration-login-bar select { max-width:110px; }
+.collaboration-panel[hidden] { display:none; }
+.collaboration-panel label { display:flex; align-items:center; gap:5px; color:#52635a; }
+.collaboration-panel select { min-height:32px; max-width:150px; }
+#collabFeedback { color:#52635a; }
+#collabFeedback.is-error { color:#b42318; }
+
 .finder-toolbar {
   display: flex;
   align-items: center;
