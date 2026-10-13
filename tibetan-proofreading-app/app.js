@@ -1360,7 +1360,7 @@ async function refreshCloudLibrary() {
       els.cloudLibraryFiles.hidden = true;
       if (cloudLibrary.authMode === "collaboration") {
         els.collaborationActorLabel.textContent = "";
-        els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = false; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
+        els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = !cloudLibrary.passwordRequired; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
       }
     }
     setCloudLibraryStatus(`云端目录读取失败：${error.message || error}`, true);
@@ -1443,7 +1443,7 @@ async function logoutCollaboration() {
   els.cloudLibraryFiles.hidden = true;
   els.collaborationPanel.hidden = true;
   els.collaborationActorLabel.textContent = "";
-  els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = false; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
+  els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = !cloudLibrary.passwordRequired; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
   els.cloudLibraryAuth.hidden = false;
   setCloudLibraryStatus("已退出协作登录。");
 }
