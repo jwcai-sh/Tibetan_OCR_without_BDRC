@@ -8492,14 +8492,15 @@ async function repairSourceRowBindings(result) {
     const layout = await response.json();
     if (state.pageNum !== page || state.cacheKey !== key || state.ocrResults.get(page) !== result
         || JSON.stringify(result) !== before) { sourceAlignmentJobs.delete(result); return; }
-    if (layout.alignment_version !== 2 || !layout.alignment_matched || layout.lines.length !== count) {
+    const layoutBboxes = layout.layout_bboxes;
+    if (layout.alignment_version !== 2 || !layout.alignment_matched || !Array.isArray(layoutBboxes) || layoutBboxes.length !== count) {
       setStatus("原文物理行数与识别块数不一致，待人工核对；未自动移动识别或校对内容。", "warn");
       return;
     }
     for (const lines of [result.lines, compare.llm.lines]) {
       if (!Array.isArray(lines) || lines.length !== count) continue;
       lines.forEach((line, i) => {
-        line.bbox = layout.lines[i].bbox;
+        line.bbox = layoutBboxes[i];
         line.bboxApproximate = false;
         line.reviewImage = null;
         line.sourceRowIndex = i;
