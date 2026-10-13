@@ -27,4 +27,7 @@ const conflicts = vm.runInContext('findPageReviewRowConflicts(shifted,reference)
 assert.equal(conflicts.length,1);
 assert.equal(conflicts[0].matchingIndex,1);
 assert.equal(vm.runInContext('findPageReviewRowConflicts(aligned,reference).length',ctx),0);
+ctx.savedCompare={bdrc:{text:'',lines:[]},llm:{text:'ཤེས་རབ་',lines:[{text:'ཤེས་རབ་'}]},
+  qwenReviews:[],qwenReviewArchive:[{originalIndex:1,text:'བོད་སྐད་',reason:'duplicate'}]};
+assert.equal(vm.runInContext('normalizeOcrCompare(savedCompare).qwenReviewArchive[0].text',ctx),'བོད་སྐད་');
 console.log('Whole-page Qwen validates row identities before replacing only its own results');

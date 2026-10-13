@@ -3956,6 +3956,8 @@ function normalizeOcrCompare(compare) {
     llm,
     openaiReviews: Array.isArray(compare.openaiReviews) ? compare.openaiReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string" && review?.model !== "ChatGPT 对话复核") : [],
     qwenReviews: Array.isArray(compare.qwenReviews) ? compare.qwenReviews.filter((review) => Number.isInteger(review?.index) && typeof review?.text === "string") : [],
+    qwenReviewArchive: Array.isArray(compare.qwenReviewArchive)
+      ? compare.qwenReviewArchive.filter((review) => Number.isInteger(review?.originalIndex) && typeof review?.text === "string") : [],
     sharedErrors: normalizeSharedErrorMarks(compare.sharedErrors || compare.commonErrors || compare.sharedErrorMarks),
   };
 }
@@ -5555,7 +5557,7 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
   select.name = `proofread-choice-${state.pageNum}-${index}`;
   select.setAttribute("aria-label", `第 ${index + 1} 个 block 采用版本`);
   const choices = showGemini ? [["llm", candidateLabel]] : [];
-  if (compare?.qwenReviews?.some((review) => review.index === index && review.alignmentStatus !== "pending-review")) choices.push(["qwen", "千问候选"]);
+  if (compare?.qwenReviews?.some((review) => review.index === index && !["pending-review", "aligned-pending-review"].includes(review.alignmentStatus))) choices.push(["qwen", "千问候选"]);
   // OpenAI candidates remain stored, but are hidden until API access is enabled.
   if (!choices.length) choices.push(["none", "待识别"]);
   choices.forEach(([value, text]) => {
@@ -5805,6 +5807,12 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
       warning.textContent = "待复核：此千问候选可能错行，旧结果保留，暂不可直接采用。";
       group.append(warning);
     }
+    if (provider === "qwen" && candidate.alignmentStatus === "aligned-pending-review") {
+      const warning = document.createElement("p");
+      warning.setAttribute("role", "status");
+      warning.textContent = "已纠正千问候选的行对应；文字仍需对照原图复核，暂不可直接采用。";
+      group.append(warning);
+    }
     const text = document.createElement("div");
     text.className = "tibetan-text openai-review-candidate";
     text.contentEditable = "true";
@@ -5861,6 +5869,23 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
       group.append(history);
     } else {
       group.append(text, quality);
+    }
+  }
+  if (provider === "qwen") {
+    const archived = getOcrSourceCompare(state.ocrResults.get(state.pageNum))?.qwenReviewArchive
+      ?.filter((review) => review.originalIndex === index) || [];
+    if (archived.length) {
+      const history = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `查看 ${archived.length} 条无法可靠对齐的旧千问输出`;
+      history.append(summary);
+      for (const review of archived) {
+        const oldText = document.createElement("p");
+        oldText.className = "tibetan-text";
+        oldText.textContent = review.text;
+        history.append(oldText);
+      }
+      group.append(history);
     }
   }
   button.addEventListener("click", async (event) => {
@@ -7140,7 +7165,7 @@ function saveProofreadBlockChoice(index, side, card) {
   const candidateProvider = side === "qwen" || side === "openai" ? side : "";
   const candidate = candidateProvider
     ? compare[`${candidateProvider}Reviews`]?.find((review) => review.index === index) : null;
-  if (candidate?.alignmentStatus === "pending-review") {
+  if (["pending-review", "aligned-pending-review"].includes(candidate?.alignmentStatus)) {
     setStatus("千问候选行对应待复核，不能直接采用；原结果保留。", "warn");
     return false;
   }
