@@ -6305,7 +6305,7 @@ function makeLineCropContext() {
 
 function makeLineCropCacheKey(sourceLine, index, context) {
   return JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "row-crop-v24"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "row-crop-v25"]);
 }
 
 function sameLineCropMetadata(a, b) {
@@ -6344,8 +6344,8 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
   const key = makeLineCropCacheKey(sourceLine, index, context);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Preview can still render. */ }
-  const currentInput = metadata?.crop_version === 24;
-  if (cached?.payload?.review_image?.crop_version === 24 && cached?.payload?.images?.length && (!currentInput || sameLineCropMetadata(metadata, cached.payload.review_image))) {
+  const currentInput = metadata?.crop_version === 25;
+  if (cached?.payload?.review_image?.crop_version === 25 && cached?.payload?.images?.length && (!currentInput || sameLineCropMetadata(metadata, cached.payload.review_image))) {
     return cached;
   }
   if (lineCropRequests.has(key)) return lineCropRequests.get(key);
@@ -6360,7 +6360,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
     const response = await fetch(endpoint, { method: "POST", body: data });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    if (payload.review_image?.crop_version !== 24) throw new Error("裁剪服务尚未更新，请重启本地服务后重试");
+    if (payload.review_image?.crop_version !== 25) throw new Error("裁剪服务尚未更新，请重启本地服务后重试");
     const entry = { payload, savedAt: new Date().toISOString(), context, modelInputs: cached?.modelInputs || {}, ...(cached?.modelInput ? { modelInput: cached.modelInput } : {}) };
     try { await accessLineCropCache(key, entry); }
     catch (error) { entry.cacheError = error.message; }

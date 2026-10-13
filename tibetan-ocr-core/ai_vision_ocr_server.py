@@ -196,7 +196,7 @@ def split_enlarged_line(enlarged, tile_width):
     return tiles, ranges
 
 
-LINE_CROP_VERSION = 24
+LINE_CROP_VERSION = 25
 
 
 def find_row_frame_clips(image_bytes, center, row, page_width, page_height):
@@ -250,14 +250,16 @@ def find_row_frame_clips(image_bytes, center, row, page_width, page_height):
 def bound_legacy_line_crop(image_bytes, bbox):
     """Resolve a saved block to one physical row without splitting its stacks."""
     bbox = dict(bbox)
-    if cv2 is None or np is None or bbox["height"] > bbox["width"]:
+    if bbox["height"] > bbox["width"]:
         return bbox
+    if cv2 is None or np is None:
+        return bound_projection_line_crop(image_bytes, bbox)
     regions = detect_traditional_column_bboxes(image_bytes)
     center = next((region for region in regions if region["id"] == "center"), None)
     if not center:
         if isinstance(bbox.get("physical_row_index"), int):
             raise RuntimeError("中栏定位失败，无法安全恢复已保存的物理行裁剪。")
-        return bbox
+        return bound_projection_line_crop(image_bytes, bbox)
     mid_x = bbox["x"] + bbox["width"] / 2
     mid_y = bbox["y"] + bbox["height"] / 2
     if not center["x"] <= mid_x <= center["x"] + center["width"]:
@@ -1037,7 +1039,7 @@ def detect_physical_text_line_bboxes(image_bytes, include_masks=False):
 
 
 def detect_pillow_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]:
-    """Projection fallback for deployments without OpenCV; no model call."""
+    """Find separate horizontal ink bands with hard inter-line crop limits."""
     if Image is None:
         return []
     with Image.open(BytesIO(image_bytes)) as original:
@@ -1048,12 +1050,11 @@ def detect_pillow_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]
     spans = []
     for y in range(height):
         xs = [x for x in range(width) if pixels[x, y] < 160]
-        # Ignore full-width scanner borders, but retain ordinary text rows.
-        spans.append((min(xs), max(xs)) if len(xs) >= max(3, width * .003)
-                     and len(xs) < width * .85 else None)
+        spans.append((min(xs), max(xs)) if max(3, width * .003) <= len(xs) < width * .85 else None)
     bands = []
     start = last = None
-    gap = max(2, round(height * .003))
+    # Two blank scan rows already separate the small title from the next line.
+    gap = max(1, round(height * .0015))
     for y, span in enumerate(spans + [None] * (gap + 1)):
         if span is not None:
             if start is None:
@@ -1062,13 +1063,29 @@ def detect_pillow_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]
         elif start is not None and y - last > gap:
             if last - start >= 2:
                 occupied = [v for v in spans[start:last + 1] if v is not None]
-                x0 = max(0, min(v[0] for v in occupied) - 2)
-                x1 = min(width, max(v[1] for v in occupied) + 3)
-                y0, y1 = max(0, start - 2), min(height, last + 3)
-                bands.append(dict(x=x0 / width, y=y0 / height,
-                                  width=(x1 - x0) / width, height=(y1 - y0) / height))
+                bands.append((min(v[0] for v in occupied), max(v[1] for v in occupied) + 1, start, last + 1))
             start = last = None
-    return bands
+    boxes = []
+    for i, (x0, x1, y0, y1) in enumerate(bands):
+        top = (bands[i - 1][3] + y0) / 2 if i else max(0, y0 - 2)
+        bottom = (y1 + bands[i + 1][2]) / 2 if i + 1 < len(bands) else min(height, y1 + 2)
+        boxes.append(dict(x=x0 / width, y=y0 / height,
+                          width=(x1 - x0) / width, height=(y1 - y0) / height,
+                          clip_top=top / height, clip_bottom=bottom / height))
+    return boxes
+
+
+def bound_projection_line_crop(image_bytes, bbox):
+    """Repair old multi-row boxes without changing saved transcription data."""
+    rows = detect_pillow_text_line_bboxes(image_bytes)
+    if not rows:
+        raise RuntimeError("未检测到独立文字行，无法生成单行预览")
+    center = bbox["y"] + bbox["height"] / 2
+    row = min(rows, key=lambda r: abs(r["y"] + r["height"] / 2 - center))
+    # A large/unknown region must not silently select a distant line.
+    if row["y"] >= bbox["y"] + bbox["height"] or row["y"] + row["height"] <= bbox["y"]:
+        raise RuntimeError("原坐标与文字行不相交，无法可靠生成单行预览")
+    return {**bbox, **row}
 
 
 def detect_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]:
