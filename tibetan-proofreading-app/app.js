@@ -737,6 +737,11 @@ async function restoreRouteFromLocation() {
   const workflow = getWorkflowFromLocation();
   if (workflow === "ocr" || workflow === "translation") {
     showWorkbenchView(workflow, { updateRoute: false });
+    const bookId = new URLSearchParams(window.location.search).get("book_id");
+    if (isCloudDeployment() && bookId) {
+      await resumeRemoteProject({ remoteBookId: bookId }, workflow);
+      return;
+    }
     await restoreActiveProjectForRoute(workflow);
     return;
   }
@@ -1180,6 +1185,7 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       ocrProfile: remoteState.ocr_profile || remoteState.ocrProfile || DEFAULT_OCR_PROFILE,
       ocrResults: remoteState.ocr_results || remoteState.ocrResults || {},
       translationResults: remoteState.translation_results || remoteState.translationResults || {},
+      ocrQualityReviews: remoteState.ocrQualityReviews || [],
     }));
     await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
     setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
