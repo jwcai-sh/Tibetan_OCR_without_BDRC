@@ -1170,7 +1170,7 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     const remoteState = await stateResponse.json().catch(() => ({}));
     if (!stateResponse.ok) throw new Error(remoteState.detail || `状态 HTTP ${stateResponse.status}`);
     const sourceBlob = await sourceResponse.blob();
-    const sourceName = project.sourceName || remoteState.name || "远程项目.pdf";
+    const sourceName = project.sourceName || remoteState.sourceName || remoteState.name || "远程项目.pdf";
     const sourceFile = new File([sourceBlob], sourceName, {
       type: sourceBlob.type || project.sourceMime || remoteState.content_type || "application/pdf",
     });
