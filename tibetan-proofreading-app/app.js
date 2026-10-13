@@ -5491,7 +5491,6 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
   });
   stack.append(
     decorateIndependentProofreadModelSection(renderQwenLineReview(index, sourceLine, bdrcLine, aiLine), index, "qwen", card),
-    decorateIndependentProofreadModelSection(renderOpenAiLineReview(index, sourceLine, bdrcLine, aiLine), index, "openai", card),
   );
 
   const activate = () => {
@@ -5549,7 +5548,7 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
   select.setAttribute("aria-label", `第 ${index + 1} 个 block 采用版本`);
   const choices = showGemini ? [["llm", candidateLabel]] : [];
   if (compare?.qwenReviews?.some((review) => review.index === index)) choices.push(["qwen", "千问候选"]);
-  if (compare?.openaiReviews?.some((review) => review.index === index)) choices.push(["openai", "OpenAI 候选"]);
+  // OpenAI candidates remain stored, but are hidden until API access is enabled.
   if (!choices.length) choices.push(["none", "待识别"]);
   choices.forEach(([value, text]) => {
     const option = document.createElement("option");
@@ -6178,6 +6177,45 @@ function renderClearSharedErrorButton(index, card, provider) {
   return button;
 }
 
+// Cache coordinates only in memory; never replace OCR or manually edited text.
+const recoveredSourceLayouts = new Map();
+function createRecoveredSourcePreview(index) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "proofread-source-preview";
+  wrapper.textContent = "正在定位原文文字行…";
+  const pageNum = state.pageNum, sourceKey = state.cacheKey;
+  const compare = getOcrSourceCompare(state.ocrResults.get(pageNum));
+  const count = compare?.llm?.lines?.length || 0;
+  const key = JSON.stringify([sourceKey, pageNum, count]);
+  if (!recoveredSourceLayouts.has(key)) {
+    recoveredSourceLayouts.set(key, (async () => {
+      const blob = await getCurrentPageImageBlob();
+      if (pageNum !== state.pageNum || sourceKey !== state.cacheKey) throw new Error("页面已切换");
+      const form = new FormData();
+      form.append("file", blob, "page.png");
+      form.append("line_count", String(count));
+      const response = await fetch("/api/layout", { method: "POST", body: form });
+      if (!response.ok) throw new Error("坐标检测服务暂不可用");
+      return response.json();
+    })());
+  }
+  recoveredSourceLayouts.get(key).then(payload => {
+    if (!wrapper.isConnected || pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
+    const line = payload.lines?.[index];
+    const preview = line?.bbox && createSourceBlockPreviewCanvas(line);
+    if (!preview) throw new Error("未检测到可靠文字行");
+    const note = document.createElement("small");
+    note.textContent = line.bbox_approximate
+      ? "近似行定位，仅供人工对照；识别使用整页原图"
+      : "原文行裁剪，仅供人工对照；识别使用整页原图";
+    wrapper.replaceChildren(note, preview);
+  }).catch(error => {
+    recoveredSourceLayouts.delete(key);
+    if (wrapper.isConnected) wrapper.textContent = `原文预览暂不可用：${error.message}。请查看左栏原图。`;
+  });
+  return wrapper;
+}
+
 function renderProofreadSourcePanel(sourceLine, index) {
   const panel = document.createElement("div");
   panel.className = "proofread-source-panel";
@@ -6201,7 +6239,7 @@ function renderProofreadSourcePanel(sourceLine, index) {
   const isTraditionalLeft = isTraditionalSide
     && ["left", "左侧"].includes(sourceLine?.regionId || sourceLine?.regionLabel);
   const preview = sourceLine?.estimated
-    ? null
+    ? (isCloudDeployment() ? createRecoveredSourcePreview(index) : null)
     : isTraditionalLeft
     ? createSourceBlockPreviewCanvas(sourceLine)
     : isTraditionalSide
@@ -7440,7 +7478,6 @@ function renderOcrSourceRows({ lines, peerLines, rowCount, side, compare = null 
       const actions = document.createElement("div");
       actions.className = "ocr-source-line-actions";
       actions.appendChild(renderQwenLineReview(index, sourceLine, side === "bdrc" ? line : peerLine, side === "llm" ? line : peerLine));
-      actions.appendChild(renderOpenAiLineReview(index, sourceLine, side === "bdrc" ? line : peerLine, side === "llm" ? line : peerLine));
       row.classList.add("has-line-review");
       row.append(number, text, actions);
     } else {

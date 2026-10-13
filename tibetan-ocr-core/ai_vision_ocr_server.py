@@ -1036,10 +1036,45 @@ def detect_physical_text_line_bboxes(image_bytes, include_masks=False):
     return rows
 
 
+def detect_pillow_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]:
+    """Projection fallback for deployments without OpenCV; no model call."""
+    if Image is None:
+        return []
+    with Image.open(BytesIO(image_bytes)) as original:
+        gray = original.convert("L")
+        gray.thumbnail((1600, 1600))
+    width, height = gray.size
+    pixels = gray.load()
+    spans = []
+    for y in range(height):
+        xs = [x for x in range(width) if pixels[x, y] < 160]
+        # Ignore full-width scanner borders, but retain ordinary text rows.
+        spans.append((min(xs), max(xs)) if len(xs) >= max(3, width * .003)
+                     and len(xs) < width * .85 else None)
+    bands = []
+    start = last = None
+    gap = max(2, round(height * .003))
+    for y, span in enumerate(spans + [None] * (gap + 1)):
+        if span is not None:
+            if start is None:
+                start = y
+            last = y
+        elif start is not None and y - last > gap:
+            if last - start >= 2:
+                occupied = [v for v in spans[start:last + 1] if v is not None]
+                x0 = max(0, min(v[0] for v in occupied) - 2)
+                x1 = min(width, max(v[1] for v in occupied) + 3)
+                y0, y1 = max(0, start - 2), min(height, last + 3)
+                bands.append(dict(x=x0 / width, y=y0 / height,
+                                  width=(x1 - x0) / width, height=(y1 - y0) / height))
+            start = last = None
+    return bands
+
+
 def detect_text_line_bboxes(image_bytes: bytes) -> list[dict[str, float]]:
     """Detect text bands while rejecting thin page borders and rules."""
     if cv2 is None or np is None:
-        return []
+        return detect_pillow_text_line_bboxes(image_bytes)
 
     color = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if color is None:
