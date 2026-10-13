@@ -48,6 +48,9 @@ def _table(name: str) -> str:
 def collaborators() -> list[str]:
     return [name.strip() for name in _env("COLLABORATOR_NAMES").split(",") if name.strip()]
 
+def password_required() -> bool:
+    return bool(_env("COLLABORATION_PASSWORD"))
+
 
 def _connect():
     try:

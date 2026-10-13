@@ -1257,6 +1257,7 @@ async function initializeCloudLibrary() {
     const config = await response.json();
     cloudLibrary.authMode = config.enabled ? "collaboration" : "legacy";
     cloudLibrary.names = Array.isArray(config.names) ? config.names : [];
+    cloudLibrary.passwordRequired = config.password_required !== false;
     const nameSelect = document.getElementById("collaboratorName");
     for (const select of [nameSelect, els.collabHeaderName]) if (select) {
       select.replaceChildren(...cloudLibrary.names.map((name) => new Option(name, name)));
@@ -1264,7 +1265,9 @@ async function initializeCloudLibrary() {
     }
     if (config.enabled) {
       document.getElementById("cloudLibraryAuthTitle").textContent = "协作者登录";
-      document.getElementById("cloudLibraryAuthHint").textContent = "选择姓名登录；测试阶段可不填口令，逐页任务分工和修改历史保存在阿里云数据库。";
+      document.getElementById("cloudLibraryAuthHint").textContent = cloudLibrary.passwordRequired
+        ? "选择姓名并输入共用口令；逐页任务分工和修改历史保存在阿里云数据库。"
+        : "测试阶段选择姓名即可登录；逐页任务分工和修改历史保存在阿里云数据库。";
       const meResponse = await fetch(`${window.location.origin}/api/collaboration/me`, { credentials: "same-origin" });
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
     } else {
@@ -1280,7 +1283,8 @@ async function initializeCloudLibrary() {
   els.collaborationLoginBar.hidden = cloudLibrary.authMode !== "collaboration";
   els.collaborationActorLabel.textContent = cloudLibrary.actor ? `协作者：${cloudLibrary.actor}` : "";
   els.collabHeaderName.hidden = Boolean(cloudLibrary.actor);
-  els.collabHeaderPassword.hidden = Boolean(cloudLibrary.actor);
+  els.collabHeaderPassword.hidden = Boolean(cloudLibrary.actor) || !cloudLibrary.passwordRequired;
+  els.collabHeaderPassword.disabled = !cloudLibrary.passwordRequired;
   els.collabHeaderLogin.hidden = Boolean(cloudLibrary.actor);
   els.collabHeaderLogout.hidden = !cloudLibrary.actor;
   if (cloudLibrary.authMode === "collaboration") els.cloudLibraryAuth.hidden = true;

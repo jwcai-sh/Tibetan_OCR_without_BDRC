@@ -114,7 +114,11 @@ async def collaboration_auth(request: Request, call_next):
 
 @app.get("/api/collaboration/config")
 def collaboration_config() -> dict[str, Any]:
-    return {"enabled": collaboration.configured(), "names": collaboration.collaborators() if collaboration.configured() else []}
+    return {
+        "enabled": collaboration.configured(),
+        "names": collaboration.collaborators() if collaboration.configured() else [],
+        "password_required": collaboration.password_required() if collaboration.configured() else True,
+    }
 
 
 @app.post("/api/collaboration/login")

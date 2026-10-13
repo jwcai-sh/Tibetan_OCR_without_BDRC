@@ -73,6 +73,7 @@ class CollaborationPostgresTests(unittest.TestCase):
     def test_password_is_optional_for_test_login(self):
         os.environ["COLLABORATION_PASSWORD"] = ""
         self.assertTrue(self.collaboration.configured())
+        self.assertFalse(self.collaboration.password_required())
 
     def test_connect_uses_postgres_and_schema(self):
         self.collaboration._connect()
