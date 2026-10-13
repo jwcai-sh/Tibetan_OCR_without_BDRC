@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261012-cloud-library-finder";
+const APP_BUILD_ID = "20261013-pdf-first-paint";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
@@ -3097,51 +3097,53 @@ async function renderCurrentPage() {
   }
 
   const token = ++state.renderToken;
-  if (await renderCurrentPdfPageWithLocalService(token)) {
+  try {
+    const page = await state.pdfDoc.getPage(state.pageNum);
+    if (token !== state.renderToken) return;
+
+    const baseViewport = page.getViewport({ scale: 1 });
+    const requestedZoom = els.zoomInput.value;
+    const availableWidth = Math.max(320, els.pageViewport.clientWidth - 40);
+    const scale = requestedZoom === "fit"
+      ? Math.min(availableWidth / baseViewport.width, 2.2)
+      : Number(requestedZoom);
+
+    const viewport = page.getViewport({ scale });
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = els.pdfCanvas;
+    const context = canvas.getContext("2d", { alpha: false });
+
+    canvas.width = Math.floor(viewport.width * dpr);
+    canvas.height = Math.floor(viewport.height * dpr);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, viewport.width, viewport.height);
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    if (token !== state.renderToken) return;
+
+    els.pdfCanvas.style.display = "block";
+    els.imagePage.style.display = "none";
+    els.emptyState.style.display = "none";
     syncPageControls(true);
     renderActiveSourceHighlight();
     updateOcrPanelForPage();
     updateTranslationPanelForPage();
     updateThumbnailState();
     deferCurrentPageSourceHydration(state.pageNum, token);
-    return;
+  } catch (error) {
+    if (token !== state.renderToken) return;
+    console.warn("Browser PDF render unavailable, falling back to server", error);
+    if (!await renderCurrentPdfPageWithLocalService(token)) throw error;
+    syncPageControls(true);
+    renderActiveSourceHighlight();
+    updateOcrPanelForPage();
+    updateTranslationPanelForPage();
+    updateThumbnailState();
+    deferCurrentPageSourceHydration(state.pageNum, token);
   }
-
-  const page = await state.pdfDoc.getPage(state.pageNum);
-  if (token !== state.renderToken) return;
-
-  const baseViewport = page.getViewport({ scale: 1 });
-  const requestedZoom = els.zoomInput.value;
-  const availableWidth = Math.max(320, els.pageViewport.clientWidth - 40);
-  const scale = requestedZoom === "fit"
-    ? Math.min(availableWidth / baseViewport.width, 2.2)
-    : Number(requestedZoom);
-
-  const viewport = page.getViewport({ scale });
-  const dpr = window.devicePixelRatio || 1;
-  const canvas = els.pdfCanvas;
-  const context = canvas.getContext("2d", { alpha: false });
-
-  canvas.width = Math.floor(viewport.width * dpr);
-  canvas.height = Math.floor(viewport.height * dpr);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
-  context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  context.fillStyle = "#fff";
-  context.fillRect(0, 0, viewport.width, viewport.height);
-
-  await page.render({ canvasContext: context, viewport }).promise;
-  if (token !== state.renderToken) return;
-
-  els.pdfCanvas.style.display = "block";
-  els.imagePage.style.display = "none";
-  els.emptyState.style.display = "none";
-  syncPageControls(true);
-  renderActiveSourceHighlight();
-  updateOcrPanelForPage();
-  updateTranslationPanelForPage();
-  updateThumbnailState();
-  deferCurrentPageSourceHydration(state.pageNum, token);
 }
 
 function deferCurrentPageSourceHydration(pageNum, renderToken = state.renderToken) {
