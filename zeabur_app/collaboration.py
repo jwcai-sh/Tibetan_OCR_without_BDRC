@@ -12,6 +12,7 @@ import json
 import os
 import time
 import threading
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,20 +33,33 @@ def configured() -> bool:
     ))
 
 
+def _schema() -> str:
+    schema = _env("COLLAB_DB_SCHEMA") or "tibetan_collab"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+        raise HTTPException(503, "协作数据库 schema 配置无效")
+    return schema
+
+
+def _table(name: str) -> str:
+    return f"{_schema()}.{name}"
+
+
 def collaborators() -> list[str]:
     return [name.strip() for name in _env("COLLABORATOR_NAMES").split(",") if name.strip()]
 
 
 def _connect():
     try:
-        import pymysql
+        import psycopg
+        from psycopg.rows import dict_row
     except ImportError as exc:  # pragma: no cover - deployment configuration
         raise HTTPException(503, "协作数据库驱动未安装") from exc
-    return pymysql.connect(
-        host=_env("COLLAB_DB_HOST"), port=int(_env("COLLAB_DB_PORT") or "3306"),
+    return psycopg.connect(
+        host=_env("COLLAB_DB_HOST"), port=int(_env("COLLAB_DB_PORT") or "5432"),
         user=_env("COLLAB_DB_USER"), password=_env("COLLAB_DB_PASSWORD"),
-        database=_env("COLLAB_DB_NAME"), charset="utf8mb4", autocommit=False,
-        cursorclass=pymysql.cursors.DictCursor, connect_timeout=8,
+        dbname=_env("COLLAB_DB_NAME"), autocommit=False,
+        row_factory=dict_row, options=f"-c search_path={_schema()},public",
+        connect_timeout=8,
     )
 
 
@@ -70,25 +84,28 @@ def _initialize_schema() -> None:
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("""CREATE TABLE IF NOT EXISTS collab_book_state (
+            schema = _schema()
+            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            cur.execute(f"""CREATE TABLE IF NOT EXISTS {_table('collab_book_state')} (
                 book_id VARCHAR(128) PRIMARY KEY,
-                state_json LONGTEXT NOT NULL,
-                page_revisions_json LONGTEXT NOT NULL,
+                state_json TEXT NOT NULL,
+                page_revisions_json TEXT NOT NULL,
                 updated_at VARCHAR(40) NOT NULL
-            ) CHARACTER SET utf8mb4""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS collab_page_assignment (
+            )""")
+            cur.execute(f"""CREATE TABLE IF NOT EXISTS {_table('collab_page_assignment')} (
                 book_id VARCHAR(128) NOT NULL, page_num INT NOT NULL,
                 stage VARCHAR(24) NOT NULL, assignee VARCHAR(128) NULL,
                 status VARCHAR(24) NOT NULL DEFAULT 'todo', updated_by VARCHAR(128) NOT NULL,
                 updated_at VARCHAR(40) NOT NULL,
                 PRIMARY KEY (book_id, page_num, stage)
-            ) CHARACTER SET utf8mb4""")
-            cur.execute("""CREATE TABLE IF NOT EXISTS collab_audit (
-                id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, book_id VARCHAR(128) NOT NULL,
+            )""")
+            cur.execute(f"""CREATE TABLE IF NOT EXISTS {_table('collab_audit')} (
+                id BIGSERIAL PRIMARY KEY, book_id VARCHAR(128) NOT NULL,
                 page_num INT NOT NULL, actor VARCHAR(128) NOT NULL, event_type VARCHAR(24) NOT NULL,
-                before_json LONGTEXT NOT NULL, after_json LONGTEXT NOT NULL,
-                created_at VARCHAR(40) NOT NULL, INDEX ix_collab_audit_book_page (book_id, page_num, id)
-            ) CHARACTER SET utf8mb4""")
+                before_json TEXT NOT NULL, after_json TEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL
+            )""")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS ix_collab_audit_book_page ON {_table('collab_audit')} (book_id, page_num, id)")
         db.commit()
     except Exception:
         db.rollback()
@@ -191,13 +208,13 @@ def load_state(book_id: str, fallback: Any) -> dict[str, Any]:
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT state_json, page_revisions_json FROM collab_book_state WHERE book_id=%s", (book_id,))
+            cur.execute(f"SELECT state_json, page_revisions_json FROM {_table('collab_book_state')} WHERE book_id=%s", (book_id,))
             row = cur.fetchone()
             if row is None:
                 fallback = fallback() if callable(fallback) else fallback
                 keys = set((fallback.get("ocr_results") or fallback.get("ocrResults") or {})) | set((fallback.get("translation_results") or fallback.get("translationResults") or {}))
                 revisions = {str(page): 1 for page in keys}
-                cur.execute("INSERT INTO collab_book_state VALUES (%s,%s,%s,%s)", (book_id, json.dumps(fallback, ensure_ascii=False), json.dumps(revisions), _now()))
+                cur.execute(f"INSERT INTO {_table('collab_book_state')} VALUES (%s,%s,%s,%s)", (book_id, json.dumps(fallback, ensure_ascii=False), json.dumps(revisions), _now()))
                 db.commit()
                 state = fallback
             else:
@@ -217,7 +234,7 @@ def save_state(book_id: str, incoming: dict[str, Any], actor: str) -> dict[str, 
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT state_json, page_revisions_json FROM collab_book_state WHERE book_id=%s FOR UPDATE", (book_id,))
+            cur.execute(f"SELECT state_json, page_revisions_json FROM {_table('collab_book_state')} WHERE book_id=%s FOR UPDATE", (book_id,))
             row = cur.fetchone()
             if row is None:
                 raise HTTPException(404, "协作书籍状态尚未初始化，请重新加载书籍")
@@ -235,10 +252,10 @@ def save_state(book_id: str, incoming: dict[str, Any], actor: str) -> dict[str, 
                 before = _page_value(current, page)
                 after = _page_value(merged, page)
                 revisions[page] = int(revisions.get(page, 0)) + 1
-                cur.execute("INSERT INTO collab_audit (book_id,page_num,actor,event_type,before_json,after_json,created_at) VALUES (%s,%s,%s,'edit',%s,%s,%s)", (book_id, int(page), actor, json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), now))
+                cur.execute(f"INSERT INTO {_table('collab_audit')} (book_id,page_num,actor,event_type,before_json,after_json,created_at) VALUES (%s,%s,%s,'edit',%s,%s,%s)", (book_id, int(page), actor, json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), now))
             merged["book_id"] = book_id
             merged["updated_at"] = now
-            cur.execute("UPDATE collab_book_state SET state_json=%s,page_revisions_json=%s,updated_at=%s WHERE book_id=%s", (json.dumps(merged, ensure_ascii=False), json.dumps(revisions), now, book_id))
+            cur.execute(f"UPDATE {_table('collab_book_state')} SET state_json=%s,page_revisions_json=%s,updated_at=%s WHERE book_id=%s", (json.dumps(merged, ensure_ascii=False), json.dumps(revisions), now, book_id))
         db.commit()
         merged["page_revisions"] = revisions
         return {"ok": True, "book_id": book_id, "updated_at": now, "page_revisions": revisions}
@@ -254,7 +271,7 @@ def assignments(book_id: str) -> list[dict[str, Any]]:
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT page_num,stage,assignee,status,updated_by,updated_at FROM collab_page_assignment WHERE book_id=%s ORDER BY page_num,stage", (book_id,))
+            cur.execute(f"SELECT page_num,stage,assignee,status,updated_by,updated_at FROM {_table('collab_page_assignment')} WHERE book_id=%s ORDER BY page_num,stage", (book_id,))
             return list(cur.fetchall())
     finally:
         db.close()
@@ -270,11 +287,11 @@ def set_assignment(book_id: str, page_num: int, stage: str, assignee: str | None
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT assignee,status FROM collab_page_assignment WHERE book_id=%s AND page_num=%s AND stage=%s FOR UPDATE", (book_id, page_num, stage))
+            cur.execute(f"SELECT assignee,status FROM {_table('collab_page_assignment')} WHERE book_id=%s AND page_num=%s AND stage=%s FOR UPDATE", (book_id, page_num, stage))
             existing = cur.fetchone()
             before = {"stage": stage, "assignee": existing["assignee"], "status": existing["status"]} if existing else {}
-            cur.execute("INSERT INTO collab_page_assignment (book_id,page_num,stage,assignee,status,updated_by,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE assignee=VALUES(assignee),status=VALUES(status),updated_by=VALUES(updated_by),updated_at=VALUES(updated_at)", (book_id, page_num, stage, assignee, status, actor, now))
-            cur.execute("INSERT INTO collab_audit (book_id,page_num,actor,event_type,before_json,after_json,created_at) VALUES (%s,%s,%s,'assignment',%s,%s,%s)", (book_id, page_num, actor, json.dumps(before, ensure_ascii=False), json.dumps({"stage": stage, "assignee": assignee, "status": status}, ensure_ascii=False), now))
+            cur.execute(f"INSERT INTO {_table('collab_page_assignment')} (book_id,page_num,stage,assignee,status,updated_by,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (book_id,page_num,stage) DO UPDATE SET assignee=EXCLUDED.assignee,status=EXCLUDED.status,updated_by=EXCLUDED.updated_by,updated_at=EXCLUDED.updated_at", (book_id, page_num, stage, assignee, status, actor, now))
+            cur.execute(f"INSERT INTO {_table('collab_audit')} (book_id,page_num,actor,event_type,before_json,after_json,created_at) VALUES (%s,%s,%s,'assignment',%s,%s,%s)", (book_id, page_num, actor, json.dumps(before, ensure_ascii=False), json.dumps({"stage": stage, "assignee": assignee, "status": status}, ensure_ascii=False), now))
         db.commit()
         return {"book_id": book_id, "page_num": page_num, "stage": stage, "assignee": assignee, "status": status, "updated_by": actor, "updated_at": now}
     except Exception:
@@ -289,7 +306,7 @@ def history(book_id: str, page_num: int, limit: int = 50) -> list[dict[str, Any]
     db = _connect()
     try:
         with db.cursor() as cur:
-            cur.execute("SELECT actor,event_type,before_json,after_json,created_at FROM collab_audit WHERE book_id=%s AND page_num=%s ORDER BY id DESC LIMIT %s", (book_id, page_num, min(max(limit, 1), 100)))
+            cur.execute(f"SELECT actor,event_type,before_json,after_json,created_at FROM {_table('collab_audit')} WHERE book_id=%s AND page_num=%s ORDER BY id DESC LIMIT %s", (book_id, page_num, min(max(limit, 1), 100)))
             rows = cur.fetchall()
         for row in rows:
             row["before"] = json.loads(row.pop("before_json"))

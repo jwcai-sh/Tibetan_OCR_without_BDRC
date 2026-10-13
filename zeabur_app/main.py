@@ -152,7 +152,7 @@ def health() -> dict[str, Any]:
         "ai_ocr": {"configured": bool(env("MODEL_AGGREGATOR_BASE_URL") or env("AI_VISION_BASE_URL"))},
         "pdf_render": {"provider": "pymupdf"},
         "translation": {"provider": env("TRANSLATE_PROVIDER", "model_aggregator")},
-        "collaboration": {"configured": collaboration.configured(), "database": "aliyun-rds-mysql" if collaboration.configured() else "not-configured"},
+        "collaboration": {"configured": collaboration.configured(), "database": "aliyun-rds-postgresql" if collaboration.configured() else "not-configured"},
     }
 
 
