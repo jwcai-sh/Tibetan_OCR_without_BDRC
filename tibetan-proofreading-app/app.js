@@ -8380,6 +8380,12 @@ function buildOcrPageMarkdown(pageNum, result) {
       output.push(formatOcrExportStats(row.stats.totalChars, row.stats.errorChars), "", ...formatOcrExportText(row.content));
     });
   }
+  if (compare?.qwenReviewArchive?.length) {
+    output.push("### 千问未对齐的旧输出", "", "以下文字保留供核查，不计入已对齐行的字数或错误率。", "");
+    for (const review of compare.qwenReviewArchive) {
+      output.push(`原记录 block ${String(review.originalIndex + 1).padStart(2, "0")}`, "", ...formatOcrExportText(review.text));
+    }
+  }
   output.push("### 当前采用的校对文本", "", ...formatOcrExportText(result?.text || ""));
   return output;
 }
