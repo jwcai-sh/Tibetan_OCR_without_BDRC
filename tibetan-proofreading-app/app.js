@@ -768,6 +768,10 @@ async function restoreActiveProjectForRoute(workflow) {
   if (!cacheKey || !cacheKey.startsWith(CACHE_PREFIX)) return;
   const project = parseCachedProject(cacheKey);
   if (!project) return;
+  if (isCloudDeployment() && project.remoteBookId) {
+    await resumeRemoteProject(project, workflow);
+    return;
+  }
 
   state.activeProjectRestoreInFlight = true;
   try {
@@ -1277,7 +1281,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         sourceName,
         sourceSize: sourceFile?.size || state.sourceSize,
         sourceMime: sourceFile?.type || state.sourceMime,
-        pageCount: Number(remoteState.page_count || remoteState.pageCount || project.pageCount || 0),
+        pageCount: Number(remoteState.page_count || remoteState.pageCount || state.pageCount || project.pageCount || 0),
         updatedAt: remoteState.updated_at || remoteState.updatedAt || new Date().toISOString(),
         remoteBookId: project.remoteBookId,
         ocrProfile: remoteState.ocr_profile || remoteState.ocrProfile || DEFAULT_OCR_PROFILE,
