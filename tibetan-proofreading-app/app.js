@@ -208,6 +208,7 @@ const state = {
   remoteSaveTimer: null,
   layoutHydrationInFlight: new Map(),
   activeProjectRestoreInFlight: false,
+  documentRequestId: 0,
 };
 
 const cloudLibrary = {
@@ -762,6 +763,7 @@ async function restoreRouteFromLocation() {
 
 async function restoreActiveProjectForRoute(workflow) {
   if (hasActiveDocument() || state.activeProjectRestoreInFlight) return;
+  const requestId = state.documentRequestId;
   const cacheKey = window.localStorage.getItem(ACTIVE_PROJECT_KEY);
   if (!cacheKey || !cacheKey.startsWith(CACHE_PREFIX)) return;
   const project = parseCachedProject(cacheKey);
@@ -770,11 +772,13 @@ async function restoreActiveProjectForRoute(workflow) {
   state.activeProjectRestoreInFlight = true;
   try {
     const sourceFile = await getStoredSourceFile(cacheKey);
+    if (requestId !== state.documentRequestId) return;
     if (!sourceFile) {
       setStatus(`已找到“${project.sourceName}”的 OCR 缓存，但源文件缓存已丢失；请重新加载原始文件。`, "warn");
       return;
     }
-    await loadFile(sourceFile);
+    const loaded = await loadFile(sourceFile);
+    if (!loaded) return;
     if (workflow === "ocr") setOcrView("proofread");
     setStatus(`已自动恢复“${sourceFile.name}”及已有 OCR/译文结果。`, "ok");
   } catch (error) {
@@ -1098,18 +1102,23 @@ function requestCachedProjectSource(project, workflow = "ocr") {
 }
 
 async function resumeLocalProject(project, workflow = "ocr") {
+  const requestId = ++state.documentRequestId;
   try {
     const sourceFile = await getStoredSourceFile(project.cacheKey);
+    if (requestId !== state.documentRequestId) return;
     if (sourceFile) {
       showWorkbenchView(workflow);
-      await loadFile(sourceFile);
+      const loaded = await loadFile(sourceFile, { requestId });
+      if (!loaded) return;
       if (workflow === "ocr") setOcrView("proofread");
       setStatus(`已恢复“${sourceFile.name}”及本机校对进度。`, "ok");
       return;
     }
   } catch (error) {
+    if (requestId !== state.documentRequestId) return;
     console.warn("Failed to restore cached source file", error);
   }
+  if (requestId !== state.documentRequestId) return;
   showWorkbenchView(workflow);
   setStatus(
     `项目“${project.sourceName}”的浏览器源文件缓存已丢失，请点击“加载文件”重新选择原始文件；已有 OCR/译文记录仍会保留。`,
@@ -1169,7 +1178,9 @@ async function removeStoredSourceFile(cacheKey) {
   database.close();
 }
 
-async function resumeRemoteProject(project, workflow = "ocr") {
+async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
+  const requestId = options.requestId ?? ++state.documentRequestId;
+  if (requestId !== state.documentRequestId) return;
   showWorkbenchView(workflow);
   setStatus(`正在恢复云端项目“${project.sourceName}”...`, "warn");
   try {
@@ -1201,24 +1212,28 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       return payload;
     }).then((remoteState) => ({ remoteState }), (error) => ({ error }));
     const source = await sourcePromise;
+    if (requestId !== state.documentRequestId) return;
     let sourceFile = source.file || null;
     let sourceName = project.sourceName || sourceFile?.name || "远程项目.pdf";
     const sourceMime = sourceFile?.type || project.sourceMime || "application/pdf";
     state.remoteRestoreInFlight = true;
     if (source.rangePdf) {
-      await loadRemotePdfWithRanges(sourceUrl, {
+      const loaded = await loadRemotePdfWithRanges(sourceUrl, {
         name: sourceName,
         size: Number(project.sourceSize) || 0,
         type: sourceMime,
-      }, project.remoteBookId);
+      }, project.remoteBookId, requestId);
+      if (!loaded) return;
     } else {
       if (sourceFile.name !== sourceName) {
         sourceFile = new File([sourceFile], sourceName, { type: sourceFile.type || sourceMime });
       }
-      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+      const loaded = await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId, requestId });
+      if (!loaded) return;
     }
 
     const stateResult = await statePromise;
+    if (requestId !== state.documentRequestId) return;
     if (stateResult.error) {
       const error = stateResult.error;
       state.remoteRestoreInFlight = false;
@@ -1243,8 +1258,10 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       sourceReloadRequired = true;
     }
     if (sourceReloadRequired) {
-      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+      const loaded = await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId, requestId });
+      if (!loaded) return;
     }
+    if (requestId !== state.documentRequestId) return;
     if (source.rangePdf) {
       state.sourceName = sourceName;
       state.sourceSize = Number(remoteState.size) || state.sourceSize;
@@ -1278,12 +1295,14 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       : `已恢复“${sourceName}”及云端校对进度。`, remoteState.collaboration_degraded ? "warn" : "ok");
     updateCollaborationPageNumber();
   } catch (error) {
+    if (requestId !== state.documentRequestId) return;
     state.remoteRestoreInFlight = false;
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
 }
 
-async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId) {
+async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requestId) {
+  if (requestId !== state.documentRequestId) return false;
   resetDocumentState();
   state.sourceName = descriptor.name || "远程项目.pdf";
   state.sourceSize = Number(descriptor.size) || 0;
@@ -1292,7 +1311,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId) {
   state.remoteBookId = remoteBookId;
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
-  await loadPdf(null, { sourceUrl, useRangeRequests: true });
+  return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId });
 }
 
 async function findCachedRemoteSource(project) {
@@ -1549,6 +1568,7 @@ function formatCloudLibrarySize(bytes) {
 }
 
 async function openCloudLibraryFile(file) {
+  const requestId = ++state.documentRequestId;
   setCloudLibraryStatus(`正在打开“${file.path}”…`);
   try {
     const response = await fetch(`${window.location.origin}/api/library/open`, {
@@ -1558,10 +1578,12 @@ async function openCloudLibraryFile(file) {
       body: JSON.stringify({ path: file.path }),
     });
     const book = await response.json().catch(() => ({}));
+    if (requestId !== state.documentRequestId) return;
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
     setCloudLibraryStatus("");
-    await resumeRemoteProject({ sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr");
+    await resumeRemoteProject({ sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr", { requestId });
   } catch (error) {
+    if (requestId !== state.documentRequestId) return;
     setCloudLibraryStatus(`打开文档失败：${error.message || error}`, true);
   }
 }
@@ -2350,6 +2372,9 @@ async function loadFile(file, options = {}) {
   if (!isSupportedSourceFile(file)) {
     throw new Error("只支持 PDF、图片、Markdown、TXT 或 DOCX 文件。");
   }
+  const requestId = options.requestId ?? ++state.documentRequestId;
+  if (requestId !== state.documentRequestId) return false;
+  if (!options.skipRemoteUpload) state.remoteRestoreInFlight = false;
 
   setStatus(`正在载入 ${file.name || "所选文件"}...`, "warn");
   resetDocumentState();
@@ -2366,11 +2391,13 @@ async function loadFile(file, options = {}) {
   }
 
   if (isCloudDeployment() && !options.skipRemoteUpload) {
-    void createRemoteBook(file)
+    void createRemoteBook(file, requestId)
       .then(() => {
+        if (requestId !== state.documentRequestId) return;
         saveCachedResults();
       })
       .catch((error) => {
+        if (requestId !== state.documentRequestId) return;
         console.warn("Failed to create remote book; continuing with local file", error);
         setStatus(
           `文件已在当前浏览器载入，但云端书籍保存失败：${error.message || error}`,
@@ -2380,27 +2407,31 @@ async function loadFile(file, options = {}) {
   }
 
   if (isPdfFile(file)) {
-    await loadPdf(file);
+    const loaded = await loadPdf(file, { requestId });
+    if (!loaded || requestId !== state.documentRequestId) return false;
     saveCachedResults();
-    return;
+    return true;
   }
 
   if (isWordFile(file)) {
     await loadWord(file);
+    if (requestId !== state.documentRequestId) return false;
     saveCachedResults();
-    return;
+    return true;
   }
 
   if (file.type.startsWith("image/")) {
     await loadImage(file);
+    if (requestId !== state.documentRequestId) return false;
     saveCachedResults();
-    return;
+    return true;
   }
 
   if (isMarkdownFile(file)) {
     await loadMarkdown(file);
+    if (requestId !== state.documentRequestId) return false;
     saveCachedResults();
-    return;
+    return true;
   }
 
   throw new Error("只支持 PDF、图片、Markdown、TXT 或 DOCX 文件。");
@@ -2504,7 +2535,12 @@ async function loadPdf(file, options = {}) {
     useSystemFonts: true,
     fontExtraProperties: true,
   });
-  state.pdfDoc = await task.promise;
+  const pdfDoc = await task.promise;
+  if (options.requestId !== undefined && options.requestId !== state.documentRequestId) {
+    if (typeof task.destroy === "function") await task.destroy().catch(() => {});
+    return false;
+  }
+  state.pdfDoc = pdfDoc;
   state.sourceType = "pdf";
   state.pageNum = 1;
   state.pageCount = state.pdfDoc.numPages;
@@ -2520,13 +2556,16 @@ async function loadPdf(file, options = {}) {
   );
   refreshControls();
   await renderCurrentPage();
+  if (options.requestId !== undefined && options.requestId !== state.documentRequestId) return false;
   await primeCurrentPageDirectText("load");
+  if (options.requestId !== undefined && options.requestId !== state.documentRequestId) return false;
   const loadedDoc = state.pdfDoc;
   scheduleIdleWork(() => {
     if (state.pdfDoc === loadedDoc) {
       buildPdfThumbnails();
     }
   });
+  return true;
 }
 
 async function loadImage(file) {
@@ -2836,7 +2875,7 @@ function saveCachedResults(options = {}) {
   }
 }
 
-async function createRemoteBook(file) {
+async function createRemoteBook(file, requestId = state.documentRequestId) {
   const formData = new FormData();
   formData.append("file", file, file.name);
   const response = await fetch(`${window.location.origin}/api/books`, { method: "POST", body: formData });
@@ -2844,6 +2883,7 @@ async function createRemoteBook(file) {
   if (!response.ok || !payload.book_id) {
     throw new Error(payload.detail || payload.error || `HTTP ${response.status}`);
   }
+  if (requestId !== state.documentRequestId) return;
   state.remoteBookId = payload.book_id;
   state.remotePageRevisions = {};
   state.remotePageSnapshots = {};
