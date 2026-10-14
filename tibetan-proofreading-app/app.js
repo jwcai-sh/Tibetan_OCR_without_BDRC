@@ -1301,6 +1301,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
     state.remoteRestoreInFlight = false;
+    if (!state.pageCount) els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
 }
@@ -1313,6 +1314,8 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
   state.sourceMime = descriptor.type || "application/pdf";
   state.cacheKey = makeCacheKey({ name: state.sourceName, size: state.sourceSize, type: state.sourceMime });
   state.remoteBookId = remoteBookId;
+  els.sourceTitle.textContent = state.sourceName;
+  els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
   return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId });
@@ -2534,7 +2537,7 @@ async function loadPdf(file, options = {}) {
     url: state.pdfUrl,
     disableStream: Boolean(options.useRangeRequests),
     disableAutoFetch: Boolean(options.useRangeRequests),
-    ...(options.useRangeRequests ? { rangeChunkSize: 4 * 1024 * 1024 } : {}),
+    ...(options.useRangeRequests ? { rangeChunkSize: 64 * 1024 } : {}),
     disableFontFace: false,
     useSystemFonts: true,
     fontExtraProperties: true,
