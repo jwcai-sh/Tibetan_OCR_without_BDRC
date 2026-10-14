@@ -2530,7 +2530,7 @@ async function loadPdf(file, options = {}) {
     url: state.pdfUrl,
     disableStream: Boolean(options.useRangeRequests),
     disableAutoFetch: Boolean(options.useRangeRequests),
-    ...(options.useRangeRequests ? { rangeChunkSize: 64 * 1024 } : {}),
+    ...(options.useRangeRequests ? { rangeChunkSize: 4 * 1024 * 1024 } : {}),
     disableFontFace: false,
     useSystemFonts: true,
     fontExtraProperties: true,
