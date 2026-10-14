@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import logging
 import mimetypes
 import os
 import sys
@@ -251,7 +252,18 @@ async def create_book(request: Request, file: UploadFile = File(...)) -> dict[st
 @app.get("/api/books/{book_id}/state")
 def get_book_state(book_id: str) -> dict[str, Any]:
     if collaboration.configured():
-        return collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+        try:
+            return collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+        except Exception as exc:
+            logging.warning("Collaboration state unavailable for book %s; trying OSS snapshot: %s", book_id, type(exc).__name__)
+            try:
+                snapshot = read_json(book_id, "state.json")
+            except HTTPException as snapshot_error:
+                raise HTTPException(503, "协作数据库暂时无法连接，且没有可用的云端状态快照；请稍后重试。") from snapshot_error
+            snapshot["collaboration_degraded"] = True
+            snapshot["collaboration_message"] = "协作数据库暂时无法连接，当前显示云端最近保存的状态。修改暂时无法同步。"
+            snapshot.setdefault("page_revisions", {})
+            return snapshot
     return read_json(book_id, "state.json")
 
 
@@ -296,8 +308,14 @@ async def put_book_state(book_id: str, request: Request) -> dict[str, Any]:
     payload["book_id"] = book_id
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()
     if collaboration.configured():
-        collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
-        return collaboration.save_state(book_id, payload, collaboration.current_actor(request))
+        try:
+            collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+            return collaboration.save_state(book_id, payload, collaboration.current_actor(request))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logging.warning("Collaboration state save unavailable for book %s: %s", book_id, type(exc).__name__)
+            raise HTTPException(503, "协作数据库暂时无法连接，本次修改尚未同步；请保留当前内容并稍后重试。") from exc
     write_json(book_id, "state.json", payload)
     return {"ok": True, "book_id": book_id, "updated_at": payload["updated_at"]}
 
@@ -321,7 +339,13 @@ async def put_assignment(book_id: str, request: Request) -> dict[str, Any]:
 def get_page_history(book_id: str, page_num: int) -> dict[str, Any]:
     if not collaboration.configured():
         raise HTTPException(503, "多人协作尚未配置")
-    return {"items": collaboration.history(book_id, page_num)}
+    try:
+        return {"items": collaboration.history(book_id, page_num)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.warning("Collaboration history unavailable for book %s page %s: %s", book_id, page_num, type(exc).__name__)
+        raise HTTPException(503, "协作数据库暂时无法连接，修改历史暂不可用；请稍后重试。") from exc
 
 
 @app.post("/api/books/{book_id}/exports")

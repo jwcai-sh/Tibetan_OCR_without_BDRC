@@ -65,7 +65,7 @@ console.log('Interrupted batch progress restores as stopped without changing OCR
 const requests = [];
 const cleared = [];
 const remoteCtx = vm.createContext({ console, fetch: async (url, options) => {
-  requests.push({ url, body: JSON.parse(options.body) }); return { ok:true };
+  requests.push({ url, body: JSON.parse(options.body) }); return { ok:true, json: async () => ({}) };
 }, window: { location:{origin:'https://app.test'}, addEventListener() {}, setTimeout: () => 7, clearTimeout: (id) => cleared.push(id) } });
 vm.runInContext(readFileSync(new URL('../app.js', import.meta.url), 'utf8'), remoteCtx);
 vm.runInContext("isCloudDeployment=()=>true; state.remoteBookId='book'; scheduleRemoteStateSave({ocrResults:{1:{text:'བོད་'}},translationResults:{}})", remoteCtx);

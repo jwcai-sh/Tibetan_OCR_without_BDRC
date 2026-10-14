@@ -13,9 +13,16 @@ from zeabur_app import main
 class FakeObject:
     def __init__(self, body):
         self.body = body
+        self.offset = 0
 
-    def read(self):
-        return self.body
+    def read(self, size=-1):
+        if size < 0:
+            chunk = self.body[self.offset:]
+            self.offset = len(self.body)
+            return chunk
+        chunk = self.body[self.offset:self.offset + size]
+        self.offset += len(chunk)
+        return chunk
 
 
 class FakeBucket:

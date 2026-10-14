@@ -266,8 +266,7 @@ function cacheElements() {
     "cloudLibraryPassword",
     "collaboratorName",
     "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout",
-    "collaborationPanel", "collabPageNumber", "collabFirstAssignee", "collabFirstStatus",
-    "collabSecondAssignee", "collabSecondStatus", "collabSaveAssignment", "collabShowHistory", "collabLogout", "collabFeedback",
+    "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabLogout", "collabFeedback",
     "cloudLibraryUnlockButton",
     "cloudLibraryStatus",
     "cloudLibraryFiles",
@@ -404,7 +403,6 @@ function wireEvents() {
   bindOptionalClick("homeRefreshProjectsButton", () => renderHomeDashboard());
   bindOptionalClick("cloudLibraryRefreshButton", () => void refreshCloudLibrary());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
-  bindOptionalClick("collabSaveAssignment", () => void savePageAssignments());
   bindOptionalClick("collabShowHistory", () => void showPageHistory());
   bindOptionalClick("collabLogout", () => void logoutCollaboration());
   bindOptionalClick("collabHeaderLogin", () => void unlockCloudLibrary());
@@ -1186,50 +1184,72 @@ async function resumeRemoteProject(project, workflow = "ocr") {
         type: blob.type || project.sourceMime || "application/pdf",
       });
     });
-    let [sourceFile, stateResponse] = await Promise.all([
-      sourcePromise,
-      fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`),
-    ]);
-    const remoteState = await stateResponse.json().catch(() => ({}));
-    if (!stateResponse.ok) throw new Error(remoteState.detail || `状态 HTTP ${stateResponse.status}`);
-    const sourceName = remoteState.sourceName || remoteState.name || project.sourceName || sourceFile.name;
+    const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
+      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(12000) : undefined,
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || `状态 HTTP ${response.status}`);
+      return payload;
+    }).then((remoteState) => ({ remoteState }), (error) => ({ error }));
+    let sourceFile = await sourcePromise;
+    let sourceName = project.sourceName || sourceFile.name;
+    if (sourceFile.name !== sourceName) {
+      sourceFile = new File([sourceFile], sourceName, { type: sourceFile.type || project.sourceMime || "application/pdf" });
+    }
+    state.remoteRestoreInFlight = true;
+    await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+
+    const stateResult = await statePromise;
+    if (stateResult.error) {
+      const error = stateResult.error;
+      state.remoteRestoreInFlight = false;
+      setStatus(`已打开“${sourceName}”原文；云端校对状态暂时无法加载（${error.message || error}）。本地已有结果仍保留，修改暂时无法确认是否已同步。`, "warn");
+      updateCollaborationPageNumber();
+      return;
+    }
+    const remoteState = stateResult.remoteState;
+    sourceName = remoteState.sourceName || remoteState.name || sourceName;
+    let sourceReloadRequired = false;
     if (remoteState.size && sourceFile.size !== Number(remoteState.size)) {
       const response = await fetch(sourceUrl);
       if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
       const blob = await response.blob();
-      sourceFile = new File([blob], sourceName, {
-        type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf",
-      });
+      sourceFile = new File([blob], sourceName, { type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf" });
+      sourceReloadRequired = true;
     }
     if (sourceFile.name !== sourceName || sourceFile.type !== (remoteState.content_type || sourceFile.type)) {
       sourceFile = new File([sourceFile], sourceName, {
         type: remoteState.content_type || sourceFile.type || project.sourceMime || "application/pdf",
       });
+      sourceReloadRequired = true;
+    }
+    if (sourceReloadRequired) {
+      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
     }
     const cacheKey = makeCacheKey(sourceFile);
     window.localStorage.setItem(cacheKey, JSON.stringify({
-      sourceName,
-      sourceSize: sourceFile.size,
-      sourceMime: sourceFile.type,
-      pageCount: Number(remoteState.page_count || remoteState.pageCount || project.pageCount || 0),
-      updatedAt: remoteState.updated_at || remoteState.updatedAt || new Date().toISOString(),
-      remoteBookId: project.remoteBookId,
-      ocrProfile: remoteState.ocr_profile || remoteState.ocrProfile || DEFAULT_OCR_PROFILE,
-      ocrResults: remoteState.ocr_results || remoteState.ocrResults || {},
-      translationResults: remoteState.translation_results || remoteState.translationResults || {},
-      ocrQualityReviews: remoteState.ocrQualityReviews || [],
+        sourceName,
+        sourceSize: sourceFile.size,
+        sourceMime: sourceFile.type,
+        pageCount: Number(remoteState.page_count || remoteState.pageCount || project.pageCount || 0),
+        updatedAt: remoteState.updated_at || remoteState.updatedAt || new Date().toISOString(),
+        remoteBookId: project.remoteBookId,
+        ocrProfile: remoteState.ocr_profile || remoteState.ocrProfile || DEFAULT_OCR_PROFILE,
+        ocrResults: remoteState.ocr_results || remoteState.ocrResults || {},
+        translationResults: remoteState.translation_results || remoteState.translationResults || {},
+        ocrQualityReviews: remoteState.ocrQualityReviews || [],
     }));
-    state.remoteRestoreInFlight = true;
-    try {
-      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
-      state.remotePageRevisions = remoteState.page_revisions || {};
-      state.remotePageSnapshots = makeRemotePageSnapshots(remoteState);
-    } finally {
-      state.remoteRestoreInFlight = false;
-    }
-    setStatus(`已恢复“${sourceName}”及云端校对进度。`, "ok");
-    void refreshCollaborationPage();
+    restoreCachedResults();
+    await renderCurrentPage();
+    state.remotePageRevisions = remoteState.page_revisions || {};
+    state.remotePageSnapshots = makeRemotePageSnapshots(remoteState);
+    state.remoteRestoreInFlight = false;
+    setStatus(remoteState.collaboration_degraded
+      ? `已打开“${sourceName}”及云端最近保存的校对进度。${remoteState.collaboration_message || "协作数据库暂不可用，修改暂时无法同步。"}`
+      : `已恢复“${sourceName}”及云端校对进度。`, remoteState.collaboration_degraded ? "warn" : "ok");
+    updateCollaborationPageNumber();
   } catch (error) {
+    state.remoteRestoreInFlight = false;
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
 }
@@ -1266,8 +1286,8 @@ async function initializeCloudLibrary() {
     if (config.enabled) {
       document.getElementById("cloudLibraryAuthTitle").textContent = "协作者登录";
       document.getElementById("cloudLibraryAuthHint").textContent = cloudLibrary.passwordRequired
-        ? "选择姓名并输入共用口令；逐页任务分工和修改历史保存在阿里云数据库。"
-        : "测试阶段选择姓名即可登录；逐页任务分工和修改历史保存在阿里云数据库。";
+        ? "选择姓名并输入共用口令；协作修改记录保存在阿里云数据库。"
+        : "测试阶段选择姓名即可登录；协作修改记录保存在阿里云数据库。";
       const meResponse = await fetch(`${window.location.origin}/api/collaboration/me`, { credentials: "same-origin" });
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
     } else {
@@ -1288,7 +1308,6 @@ async function initializeCloudLibrary() {
   els.collabHeaderLogin.hidden = Boolean(cloudLibrary.actor);
   els.collabHeaderLogout.hidden = !cloudLibrary.actor;
   if (cloudLibrary.authMode === "collaboration") els.cloudLibraryAuth.hidden = true;
-  populateAssigneeSelects();
   if (cloudLibrary.actor) void refreshCloudLibrary();
 }
 
@@ -1312,7 +1331,6 @@ async function unlockCloudLibrary() {
       els.collabHeaderPassword.value = "";
       els.cloudLibraryAuth.hidden = true;
       document.getElementById("collaborationPanel").hidden = false;
-      populateAssigneeSelects();
       void restoreRouteFromLocation();
     } catch (error) { setCloudLibraryStatus(`登录失败：${error.message || error}`, true); return; }
   } else cloudLibrary.token = token;
@@ -1369,58 +1387,15 @@ async function refreshCloudLibrary() {
   }
 }
 
-function populateAssigneeSelects() {
-  for (const id of ["collabFirstAssignee", "collabSecondAssignee"]) {
-    const select = els[id];
-    if (!select) continue;
-    const selected = select.value;
-    select.replaceChildren(new Option("未分配", ""), ...cloudLibrary.names.map((name) => new Option(name, name)));
-    select.value = cloudLibrary.names.includes(selected) ? selected : "";
-  }
-}
-
 function setCollaborationFeedback(message, isError = false) {
   if (!els.collabFeedback) return;
   els.collabFeedback.textContent = message;
   els.collabFeedback.classList.toggle("is-error", isError);
 }
 
-async function refreshCollaborationPage() {
+function updateCollaborationPageNumber() {
   if (cloudLibrary.authMode !== "collaboration" || !state.remoteBookId || !els.collaborationPanel || els.collaborationPanel.hidden) return;
   els.collabPageNumber.textContent = String(state.pageNum);
-  els.collabFirstAssignee.value = ""; els.collabFirstStatus.value = "todo";
-  els.collabSecondAssignee.value = ""; els.collabSecondStatus.value = "todo";
-  try {
-    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/assignments`, { credentials: "same-origin" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    for (const row of payload.items || []) {
-      if (Number(row.page_num) !== state.pageNum) continue;
-      const suffix = row.stage === "first" ? "First" : "Second";
-      els[`collab${suffix}Assignee`].value = row.assignee || "";
-      els[`collab${suffix}Status`].value = row.status || "todo";
-    }
-  } catch (error) { setCollaborationFeedback(`读取分工失败：${error.message || error}`, true); }
-}
-
-async function savePageAssignments() {
-  if (!state.remoteBookId) return setCollaborationFeedback("请先打开一本文档。", true);
-  const updates = [
-    { stage: "first", assignee: els.collabFirstAssignee.value || null, status: els.collabFirstStatus.value },
-    { stage: "second", assignee: els.collabSecondAssignee.value || null, status: els.collabSecondStatus.value },
-  ];
-  try {
-    for (const update of updates) {
-      const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/assignments`, {
-        method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page_num: state.pageNum, ...update }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    }
-    setCollaborationFeedback(`第 ${state.pageNum} 页分工已保存。`);
-    void refreshCollaborationPage();
-  } catch (error) { setCollaborationFeedback(`保存分工失败：${error.message || error}`, true); }
 }
 
 async function showPageHistory() {
@@ -1431,7 +1406,7 @@ async function showPageHistory() {
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     const rows = payload.items || [];
     setCollaborationFeedback(rows.length ? rows.map((row) => `${row.created_at} · ${row.actor} · ${row.event_type}`).join("\n") : "本页暂无修改记录。");
-    if (rows.length) window.alert(rows.map((row) => `${row.created_at}\n${row.actor} · ${row.event_type}\n修改前：${JSON.stringify(row.before)}\n修改后：${JSON.stringify(row.after)}`).join("\n\n"));
+    if (rows.length) window.alert(rows.map((row) => `${row.created_at}\n${row.actor} · ${row.event_type === "edit" ? "保存修改" : row.event_type}\n修改前：${JSON.stringify(row.before)}\n修改后：${JSON.stringify(row.after)}`).join("\n\n"));
   } catch (error) { setCollaborationFeedback(`读取历史失败：${error.message || error}`, true); }
 }
 
@@ -3547,7 +3522,7 @@ async function goToPage(pageNum, options = {}) {
     return;
   }
   state.pageNum = nextPage;
-  void refreshCollaborationPage();
+  updateCollaborationPageNumber();
   clearSourceLineHighlight();
   await renderCurrentPage();
   scheduleIdleWork(() => primeCurrentPageDirectText("page"));
