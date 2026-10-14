@@ -1175,15 +1175,24 @@ async function resumeRemoteProject(project, workflow = "ocr") {
   try {
     const baseUrl = window.location.origin;
     const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source`;
-    const sourcePromise = findCachedRemoteSource(project).then(async (cached) => {
-      if (cached) return cached;
+    const sourcePromise = (async () => {
+      const pdfDescriptor = { name: project.sourceName || "", type: project.sourceMime || "application/pdf" };
+      if (isPdfFile(pdfDescriptor)) {
+        const cachedPromise = findCachedRemoteSource(project);
+        const cached = await Promise.race([
+          cachedPromise,
+          new Promise((resolve) => window.setTimeout(() => resolve(null), 250)),
+        ]);
+        if (cached) return { file: cached };
+        return { rangePdf: true };
+      }
       const response = await fetch(sourceUrl);
       if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
       const blob = await response.blob();
-      return new File([blob], project.sourceName || "远程项目.pdf", {
+      return { file: new File([blob], project.sourceName || "远程项目", {
         type: blob.type || project.sourceMime || "application/pdf",
-      });
-    });
+      }) };
+    })();
     const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
       signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(12000) : undefined,
     }).then(async (response) => {
@@ -1191,13 +1200,23 @@ async function resumeRemoteProject(project, workflow = "ocr") {
       if (!response.ok) throw new Error(payload.detail || `状态 HTTP ${response.status}`);
       return payload;
     }).then((remoteState) => ({ remoteState }), (error) => ({ error }));
-    let sourceFile = await sourcePromise;
-    let sourceName = project.sourceName || sourceFile.name;
-    if (sourceFile.name !== sourceName) {
-      sourceFile = new File([sourceFile], sourceName, { type: sourceFile.type || project.sourceMime || "application/pdf" });
-    }
+    const source = await sourcePromise;
+    let sourceFile = source.file || null;
+    let sourceName = project.sourceName || sourceFile?.name || "远程项目.pdf";
+    const sourceMime = sourceFile?.type || project.sourceMime || "application/pdf";
     state.remoteRestoreInFlight = true;
-    await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+    if (source.rangePdf) {
+      await loadRemotePdfWithRanges(sourceUrl, {
+        name: sourceName,
+        size: Number(project.sourceSize) || 0,
+        type: sourceMime,
+      }, project.remoteBookId);
+    } else {
+      if (sourceFile.name !== sourceName) {
+        sourceFile = new File([sourceFile], sourceName, { type: sourceFile.type || sourceMime });
+      }
+      await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
+    }
 
     const stateResult = await statePromise;
     if (stateResult.error) {
@@ -1210,14 +1229,14 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     const remoteState = stateResult.remoteState;
     sourceName = remoteState.sourceName || remoteState.name || sourceName;
     let sourceReloadRequired = false;
-    if (remoteState.size && sourceFile.size !== Number(remoteState.size)) {
+    if (sourceFile && remoteState.size && sourceFile.size !== Number(remoteState.size)) {
       const response = await fetch(sourceUrl);
       if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
       const blob = await response.blob();
       sourceFile = new File([blob], sourceName, { type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf" });
       sourceReloadRequired = true;
     }
-    if (sourceFile.name !== sourceName || sourceFile.type !== (remoteState.content_type || sourceFile.type)) {
+    if (sourceFile && (sourceFile.name !== sourceName || sourceFile.type !== (remoteState.content_type || sourceFile.type))) {
       sourceFile = new File([sourceFile], sourceName, {
         type: remoteState.content_type || sourceFile.type || project.sourceMime || "application/pdf",
       });
@@ -1226,11 +1245,21 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     if (sourceReloadRequired) {
       await loadFile(sourceFile, { skipRemoteUpload: true, remoteBookId: project.remoteBookId });
     }
-    const cacheKey = makeCacheKey(sourceFile);
+    if (source.rangePdf) {
+      state.sourceName = sourceName;
+      state.sourceSize = Number(remoteState.size) || state.sourceSize;
+      state.sourceMime = remoteState.content_type || sourceMime;
+      const nextCacheKey = makeCacheKey({ name: sourceName, size: state.sourceSize, type: state.sourceMime });
+      if (nextCacheKey !== state.cacheKey) {
+        state.cacheKey = nextCacheKey;
+        window.localStorage.setItem(ACTIVE_PROJECT_KEY, nextCacheKey);
+      }
+    }
+    const cacheKey = sourceFile ? makeCacheKey(sourceFile) : state.cacheKey;
     window.localStorage.setItem(cacheKey, JSON.stringify({
         sourceName,
-        sourceSize: sourceFile.size,
-        sourceMime: sourceFile.type,
+        sourceSize: sourceFile?.size || state.sourceSize,
+        sourceMime: sourceFile?.type || state.sourceMime,
         pageCount: Number(remoteState.page_count || remoteState.pageCount || project.pageCount || 0),
         updatedAt: remoteState.updated_at || remoteState.updatedAt || new Date().toISOString(),
         remoteBookId: project.remoteBookId,
@@ -1252,6 +1281,18 @@ async function resumeRemoteProject(project, workflow = "ocr") {
     state.remoteRestoreInFlight = false;
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
+}
+
+async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId) {
+  resetDocumentState();
+  state.sourceName = descriptor.name || "远程项目.pdf";
+  state.sourceSize = Number(descriptor.size) || 0;
+  state.sourceMime = descriptor.type || "application/pdf";
+  state.cacheKey = makeCacheKey({ name: state.sourceName, size: state.sourceSize, type: state.sourceMime });
+  state.remoteBookId = remoteBookId;
+  window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
+  setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
+  await loadPdf(null, { sourceUrl, useRangeRequests: true });
 }
 
 async function findCachedRemoteSource(project) {
@@ -1519,7 +1560,7 @@ async function openCloudLibraryFile(file) {
     const book = await response.json().catch(() => ({}));
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
     setCloudLibraryStatus("");
-    await resumeRemoteProject({ sourceName: book.name, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr");
+    await resumeRemoteProject({ sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr");
   } catch (error) {
     setCloudLibraryStatus(`打开文档失败：${error.message || error}`, true);
   }
@@ -2446,16 +2487,19 @@ function isWordFile(file) {
   return file.type === DOCX_MIME || name.endsWith(".docx") || name.endsWith(".doc");
 }
 
-async function loadPdf(file) {
+async function loadPdf(file, options = {}) {
   if (!window.pdfjsLib) {
     setStatus("PDF.js 未加载，无法解析 PDF。", "error");
     return;
   }
 
-  state.pdfFile = file;
-  state.pdfUrl = URL.createObjectURL(file);
+  state.pdfFile = file || null;
+  state.pdfUrl = options.sourceUrl || URL.createObjectURL(file);
   const task = window.pdfjsLib.getDocument({
     url: state.pdfUrl,
+    disableStream: Boolean(options.useRangeRequests),
+    disableAutoFetch: Boolean(options.useRangeRequests),
+    ...(options.useRangeRequests ? { rangeChunkSize: 64 * 1024 } : {}),
     disableFontFace: false,
     useSystemFonts: true,
     fontExtraProperties: true,

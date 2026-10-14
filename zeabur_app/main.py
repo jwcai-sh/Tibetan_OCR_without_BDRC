@@ -4,6 +4,7 @@ import json
 import hashlib
 import hmac
 import logging
+import re
 import mimetypes
 import os
 import sys
@@ -273,8 +274,32 @@ def get_book_source(book_id: str, request: Request) -> Response:
     source_key = str(metadata.get("source_key") or "")
     if not source_key:
         raise HTTPException(404, "书籍源文件不存在")
+    size = int(metadata.get("size") or 0)
+    range_header = request.headers.get("range", "")
+    byte_range: tuple[int, int] | None = None
+    status_code = 200
+    range_headers: dict[str, str] = {}
+    if range_header:
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
+        if not match or not size or not (match.group(1) or match.group(2)):
+            raise HTTPException(416, "无效的字节范围", headers={"Content-Range": f"bytes */{size}"})
+        if match.group(1):
+            start = int(match.group(1))
+            end = int(match.group(2)) if match.group(2) else size - 1
+        else:
+            suffix_length = int(match.group(2))
+            if suffix_length <= 0:
+                raise HTTPException(416, "无效的字节范围", headers={"Content-Range": f"bytes */{size}"})
+            start, end = max(0, size - suffix_length), size - 1
+        if start >= size or end < start:
+            raise HTTPException(416, "字节范围超出文件大小", headers={"Content-Range": f"bytes */{size}"})
+        end = min(end, size - 1)
+        byte_range = (start, end)
+        status_code = 206
+        range_headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        range_headers["Content-Length"] = str(end - start + 1)
     try:
-        source = oss_bucket().get_object(source_key)
+        source = oss_bucket().get_object(source_key, byte_range=byte_range) if byte_range else oss_bucket().get_object(source_key)
     except oss2.exceptions.NoSuchKey as exc:
         raise HTTPException(404, "书籍源文件不存在") from exc
     safe_name = Path(str(metadata.get("name") or "source.pdf")).name
@@ -290,13 +315,16 @@ def get_book_source(book_id: str, request: Request) -> Response:
     headers = {
         "Content-Disposition": f"attachment; filename=source; filename*=UTF-8''{quote(safe_name)}",
         "Cache-Control": "private, max-age=3600",
+        "Accept-Ranges": "bytes",
+        **range_headers,
     }
-    if int(metadata.get("size") or 0) > 0:
-        headers["Content-Length"] = str(metadata["size"])
+    if size > 0 and not range_headers:
+        headers["Content-Length"] = str(size)
     return StreamingResponse(
         chunks(),
         media_type=str(metadata.get("content_type") or "application/octet-stream"),
         headers=headers,
+        status_code=status_code,
     )
 
 

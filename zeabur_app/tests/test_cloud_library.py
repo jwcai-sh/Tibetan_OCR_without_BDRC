@@ -31,10 +31,13 @@ class FakeBucket:
             "待识别文档/经书/第一册.pdf": b"%PDF-1.4\n",
         }
 
-    def get_object(self, key):
+    def get_object(self, key, byte_range=None):
         if key not in self.objects:
             raise oss2.exceptions.NoSuchKey(404, {}, b"", {})
-        return FakeObject(self.objects[key])
+        body = self.objects[key]
+        if byte_range is not None:
+            body = body[byte_range[0]:byte_range[1] + 1]
+        return FakeObject(body)
 
     def put_object(self, key, body, headers=None):
         self.objects[key] = body
@@ -78,6 +81,15 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/books/{book_id}/source").content, b"%PDF-1.4\n")
         self.assertEqual(self.client.get(f"/api/books/{book_id}/state").status_code, 200)
         self.assertTrue(any(key.endswith("state.json") for key in self.bucket.objects))
+
+    def test_source_supports_byte_ranges_for_fast_pdf_preview(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        book = self.client.post("/api/library/open", headers=headers, json={"path": "经书/第一册.pdf"}).json()
+        response = self.client.get(f"/api/books/{book['book_id']}/source", headers={**headers, "Range": "bytes=0-4"})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"%PDF-")
+        self.assertEqual(response.headers["content-range"], "bytes 0-4/9")
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
 
     def test_open_rejects_unauthorized_and_path_traversal(self):
         self.assertEqual(self.client.post("/api/library/open", json={"path": "经书/第一册.pdf"}).status_code, 401)
