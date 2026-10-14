@@ -201,7 +201,7 @@ async def open_library_book(request: Request, authorization: str = Header(defaul
     try:
         existing = read_json("_library-index", index_name)
         if existing.get("source_key") == source_key and existing.get("book_id"):
-            return existing
+            return {**existing, "size": int(source.content_length)}
     except HTTPException as exc:
         if exc.status_code != 404:
             raise
@@ -274,7 +274,11 @@ def get_book_source(book_id: str, request: Request) -> Response:
     source_key = str(metadata.get("source_key") or "")
     if not source_key:
         raise HTTPException(404, "书籍源文件不存在")
-    size = int(metadata.get("size") or 0)
+    try:
+        source_head = oss_bucket().head_object(source_key)
+    except oss2.exceptions.NoSuchKey as exc:
+        raise HTTPException(404, "书籍源文件不存在") from exc
+    size = int(source_head.content_length)
     range_header = request.headers.get("range", "")
     byte_range: tuple[int, int] | None = None
     status_code = 200
@@ -314,7 +318,7 @@ def get_book_source(book_id: str, request: Request) -> Response:
 
     headers = {
         "Content-Disposition": f"attachment; filename=source; filename*=UTF-8''{quote(safe_name)}",
-        "Cache-Control": "private, max-age=3600",
+        "Cache-Control": "private, no-store",
         "Accept-Ranges": "bytes",
         **range_headers,
     }

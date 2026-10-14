@@ -1189,16 +1189,10 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   setStatus(`正在恢复云端项目“${project.sourceName}”...`, "warn");
   try {
     const baseUrl = window.location.origin;
-    const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source`;
+    const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source?v=${Date.now()}`;
     const sourcePromise = (async () => {
       const pdfDescriptor = { name: project.sourceName || "", type: project.sourceMime || "application/pdf" };
       if (isPdfFile(pdfDescriptor)) {
-        const cachedPromise = findCachedRemoteSource(project);
-        const cached = await Promise.race([
-          cachedPromise,
-          new Promise((resolve) => window.setTimeout(() => resolve(null), 250)),
-        ]);
-        if (cached) return { file: cached };
         return { rangePdf: true };
       }
       const response = await fetch(sourceUrl);
@@ -1268,13 +1262,8 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     if (requestId !== state.documentRequestId) return;
     if (source.rangePdf) {
       state.sourceName = sourceName;
-      state.sourceSize = Number(remoteState.size) || state.sourceSize;
+      state.sourceSize = Number(project.sourceSize) || Number(remoteState.size) || state.sourceSize;
       state.sourceMime = remoteState.content_type || sourceMime;
-      const nextCacheKey = makeCacheKey({ name: sourceName, size: state.sourceSize, type: state.sourceMime });
-      if (nextCacheKey !== state.cacheKey) {
-        state.cacheKey = nextCacheKey;
-        window.localStorage.setItem(ACTIVE_PROJECT_KEY, nextCacheKey);
-      }
     }
     const cacheKey = sourceFile ? makeCacheKey(sourceFile) : state.cacheKey;
     window.localStorage.setItem(cacheKey, JSON.stringify({
@@ -1308,11 +1297,12 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
 
 async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requestId) {
   if (requestId !== state.documentRequestId) return false;
+  const existingProject = getHomeProjects().find((project) => project.remoteBookId === remoteBookId);
   resetDocumentState();
   state.sourceName = descriptor.name || "远程项目.pdf";
   state.sourceSize = Number(descriptor.size) || 0;
   state.sourceMime = descriptor.type || "application/pdf";
-  state.cacheKey = makeCacheKey({ name: state.sourceName, size: state.sourceSize, type: state.sourceMime });
+  state.cacheKey = existingProject?.cacheKey || makeCacheKey({ name: state.sourceName, size: state.sourceSize, type: state.sourceMime });
   state.remoteBookId = remoteBookId;
   els.sourceTitle.textContent = state.sourceName;
   els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
