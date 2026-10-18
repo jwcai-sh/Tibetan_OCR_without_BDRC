@@ -1191,15 +1191,31 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     const baseUrl = window.location.origin;
     const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source?v=${Date.now()}`;
     const sourcePromise = (async () => {
-      const pdfDescriptor = { name: project.sourceName || "", type: project.sourceMime || "application/pdf" };
+      let sourceName = project.sourceName || "";
+      let sourceMime = project.sourceMime || "";
+      let sourceSize = Number(project.sourceSize) || 0;
+      if (!sourceName || !sourceMime) {
+        const probe = await fetch(sourceUrl, { headers: { Range: "bytes=0-0" } });
+        if (!probe.ok) throw new Error(`源文件 HTTP ${probe.status}`);
+        const disposition = probe.headers.get("content-disposition") || "";
+        const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+        if (!sourceName && encodedName) {
+          try { sourceName = decodeURIComponent(encodedName); } catch (_) { /* Use the MIME fallback below. */ }
+        }
+        sourceMime ||= (probe.headers.get("content-type") || "").split(";")[0].trim();
+        sourceSize ||= Number(probe.headers.get("content-range")?.match(/\/(\d+)$/)?.[1]) || 0;
+        await probe.body?.cancel();
+      }
+      sourceName ||= sourceMime === "application/pdf" ? "远程项目.pdf" : "远程项目.png";
+      const pdfDescriptor = { name: sourceName, type: sourceMime };
       if (isPdfFile(pdfDescriptor)) {
-        return { rangePdf: true };
+        return { rangePdf: true, name: sourceName, type: sourceMime, size: sourceSize };
       }
       const response = await fetch(sourceUrl);
       if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
       const blob = await response.blob();
-      return { file: new File([blob], project.sourceName || "远程项目", {
-        type: blob.type || project.sourceMime || "application/pdf",
+      return { file: new File([blob], sourceName, {
+        type: blob.type || sourceMime || "application/octet-stream",
       }) };
     })();
     const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
@@ -1212,13 +1228,13 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     const source = await sourcePromise;
     if (requestId !== state.documentRequestId) return;
     let sourceFile = source.file || null;
-    let sourceName = project.sourceName || sourceFile?.name || "远程项目.pdf";
-    const sourceMime = sourceFile?.type || project.sourceMime || "application/pdf";
+    let sourceName = source.name || sourceFile?.name || "远程项目.pdf";
+    const sourceMime = sourceFile?.type || source.type || "application/pdf";
     state.remoteRestoreInFlight = true;
     if (source.rangePdf) {
       const loaded = await loadRemotePdfWithRanges(sourceUrl, {
         name: sourceName,
-        size: Number(project.sourceSize) || 0,
+        size: source.size || 0,
         type: sourceMime,
       }, project.remoteBookId, requestId);
       if (!loaded) return;
