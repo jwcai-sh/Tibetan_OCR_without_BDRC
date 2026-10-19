@@ -6404,8 +6404,8 @@ async function recognizeQwenRow(index, sourceLine, aiLine, button, feedback) {
     form.append("bbox", JSON.stringify(bbox));
     form.append("model", "qwen3.8-max");
     const response = await fetchOcrWithTransientRetry(endpoint, form, true);
-    const payload = await parseOcrResponse(response);
-    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || payload.detail || `HTTP ${response.status}`);
     if (payload.provider !== "qwen" || payload.model !== "qwen3.8-max") {
       throw new Error("返回模型不是 qwen3.8-max，原结果保留。");
     }
