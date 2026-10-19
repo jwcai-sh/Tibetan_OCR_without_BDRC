@@ -596,7 +596,7 @@ function wireEvents() {
       updatedAt: new Date().toISOString(),
     });
     const saved = saveCachedResults() !== false;
-    setStatus(saved ? "当前页各 block 的修改已自动保存。" : "当前页修改未能保存，请重试。", saved ? "ok" : "error");
+    setStatus(saved ? "当前页各行的修改已自动保存。" : "当前页修改未能保存，请重试。", saved ? "ok" : "error");
     renderOcrLineComparison();
     updateSummary();
     updateThumbnailState();
@@ -2359,7 +2359,7 @@ function updateSourcePreviewScaleButtons() {
     button.disabled =
       (isDecrease && state.sourcePreviewScale <= SOURCE_PREVIEW_SCALE_MIN) ||
       (isIncrease && state.sourcePreviewScale >= SOURCE_PREVIEW_SCALE_MAX);
-    button.title = `${isDecrease ? "缩小" : "放大"}原文 block 预览（当前 ${currentPercent}%）`;
+    button.title = `${isDecrease ? "缩小" : "放大"}原文行预览（当前 ${currentPercent}%）`;
   });
 }
 
@@ -5581,7 +5581,7 @@ function renderOcrLineComparison() {
 
     const preview = document.createElement("div");
     preview.className = "ocr-line-preview";
-    if (line.deleted) preview.textContent = "此 block 的 OCR 结果已删除；可在校对视图撤销。";
+    if (line.deleted) preview.textContent = "此行的 OCR 结果已删除；可在校对视图撤销。";
     else renderOcrLineMarkup(preview, line.text || "", {manualEditRanges: getManualEditRanges(line)});
 
     const editor = document.createElement("textarea");
@@ -5630,7 +5630,7 @@ function renderProofreadMergedView() {
   if (!state.pageCount) {
     const empty = document.createElement("div");
     empty.className = "line-compare-empty";
-    empty.innerHTML = "<strong>等待加载文件</strong><span>加载 PDF 或图片后，这里会按 block 显示原文和 Gemini Vision 结果。</span>";
+    empty.innerHTML = "<strong>等待加载文件</strong><span>加载 PDF 或图片后，这里会逐行显示原文和 Gemini Vision 结果。</span>";
     els.ocrLineCompare.appendChild(empty);
     renderAiOcrPanelForPage();
     return;
@@ -5651,7 +5651,7 @@ function renderProofreadMergedView() {
   if (!rowCount) {
     const empty = document.createElement("div");
     empty.className = "line-compare-empty";
-    empty.innerHTML = "<strong>等待识别</strong><span>点击“识别”后，每个原文 block 下方会出现可编辑的 Gemini Vision 结果。</span>";
+    empty.innerHTML = "<strong>等待识别</strong><span>点击“识别”后，每行原文下方会出现可编辑的 Gemini Vision 结果。</span>";
     els.ocrLineCompare.appendChild(empty);
     return;
   }
@@ -5717,8 +5717,8 @@ function setProofreadBlockDeleted(index, deleted) {
   updateSummary();
   updateThumbnailState();
   setStatus(saved
-    ? (deleted ? `已删除并自动保存第 ${index + 1} 个 block 的 OCR 结果；原文保留，可撤销。` : `已恢复并自动保存第 ${index + 1} 个 block 的 OCR 结果。`)
-    : `第 ${index + 1} 个 block 的删除状态未能保存，请重试。`, saved ? "ok" : "error");
+    ? (deleted ? `已删除并自动保存第 ${index + 1} 行的 OCR 结果；原文保留，可撤销。` : `已恢复并自动保存第 ${index + 1} 行的 OCR 结果。`)
+    : `第 ${index + 1} 行的删除状态未能保存，请重试。`, saved ? "ok" : "error");
   return saved;
 }
 
@@ -5726,12 +5726,12 @@ function renderDeletedProofreadBlockCard(index) {
   const notice = document.createElement("div");
   notice.className = "proofread-deleted-block-notice";
   const message = document.createElement("span");
-  message.textContent = "此 block 的 OCR 结果已从当前页文本中移除，原文与候选仍保留。";
+  message.textContent = "此行的 OCR 结果已从当前页文本中移除，原文与候选仍保留。";
   const restore = document.createElement("button");
   restore.className = "ghost-button compact proofread-restore-block-button";
   restore.type = "button";
   restore.innerHTML = '<i data-lucide="undo-2"></i><span>撤销删除</span>';
-  restore.setAttribute("aria-label", `撤销删除第 ${index + 1} 个 block`);
+  restore.setAttribute("aria-label", `撤销删除第 ${index + 1} 行`);
   restore.addEventListener("click", (event) => {
     event.stopPropagation();
     setProofreadBlockDeleted(index, false);
@@ -5744,9 +5744,9 @@ function renderDeleteProofreadBlockButton(index) {
   const button = document.createElement("button");
   button.className = "ghost-button compact proofread-delete-block-button";
   button.type = "button";
-  button.innerHTML = '<i data-lucide="trash-2"></i><span>删除 block</span>';
-  button.title = "从当前页 OCR 结果和导出文本中移除这个 block；可在原位撤销";
-  button.setAttribute("aria-label", `删除第 ${index + 1} 个 block 识别结果`);
+  button.innerHTML = '<i data-lucide="trash-2"></i><span>删除本行</span>';
+  button.title = "从当前页 OCR 结果和导出文本中移除这一行；可在原位撤销";
+  button.setAttribute("aria-label", `删除第 ${index + 1} 行识别结果`);
   button.addEventListener("mousedown", (event) => event.preventDefault());
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -5782,7 +5782,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
   const hasPreciseSourceLine = Boolean(sourceLine?.bbox && !sourceLine.estimated);
   card.classList.toggle("has-source-line", hasPreciseSourceLine);
   card.title = hasPreciseSourceLine
-    ? `点击同步左栏第 ${index + 1} 个${regionLabel ? `${regionLabel} ` : ""}原文 block`
+    ? `点击同步左栏第 ${index + 1} 行${regionLabel ? `${regionLabel} ` : ""}原文`
     : "";
   card.classList.toggle("is-active", state.activeOcrLine === index);
 
@@ -5901,7 +5901,7 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini 
   const select = document.createElement("select");
   select.className = "proofread-choice-select";
   select.name = `proofread-choice-${state.pageNum}-${index}`;
-  select.setAttribute("aria-label", `第 ${index + 1} 个 block 采用版本`);
+  select.setAttribute("aria-label", `第 ${index + 1} 行采用版本`);
   const choices = showGemini ? [["llm", candidateLabel]] : [];
   if (compare?.qwenReviews?.some((review) => review.index === index && !["pending-review", "aligned-pending-review"].includes(review.alignmentStatus))) choices.push(["qwen", "千问候选"]);
   // OpenAI candidates remain stored, but are hidden until API access is enabled.
@@ -5985,7 +5985,7 @@ function decorateIndependentProofreadModelSection(group, index, provider, card) 
   const header = document.createElement("div");
   header.className = "proofread-editor-label proofread-independent-label";
   const title = document.createElement("strong");
-  title.textContent = `${proofreadModelName(provider)} block ${String(index + 1).padStart(2, "0")} 识别`;
+  title.textContent = `${proofreadModelName(provider)} 第 ${index + 1} 行识别`;
   const controls = group.querySelector(".review-provider-controls");
   const content = document.createElement("div");
   content.className = "proofread-model-content proofread-independent-content";
@@ -6237,7 +6237,7 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
   button.addEventListener("click", async (event) => {
     event.stopPropagation();
     if (state.batchOcr?.running) {
-      feedback.textContent = "请先停止批量识别，再复核单个 block。";
+      feedback.textContent = "请先停止批量识别，再复核单行。";
       return;
     }
     await reviewProviderWholePage(provider, button, select, feedback);
@@ -6658,8 +6658,8 @@ function renderProofreadSourcePanel(sourceLine, index) {
   const regionLineCount = Number(sourceLine?.regionLineCount || 0);
   const regionCountLabel = regionLineCount > 1 ? `（${regionLineCount}行）` : "";
   title.textContent = sourceLine?.bboxApproximate
-    ? `${regionLabel}原文 block ${String(index + 1).padStart(2, "0")} 预览（合并定位）${regionCountLabel}`
-    : `${regionLabel}原文 block ${String(index + 1).padStart(2, "0")} 预览${regionCountLabel}`;
+    ? `${regionLabel}原文第 ${index + 1} 行预览（合并定位）${regionCountLabel}`
+    : `${regionLabel}原文第 ${index + 1} 行预览${regionCountLabel}`;
   header.append(title);
   if (!isTraditionalSide) header.append(renderSourcePreviewScaleControls());
   panel.appendChild(header);
@@ -6684,7 +6684,7 @@ function renderProofreadSourcePanel(sourceLine, index) {
       ? "右侧暂不显示单行裁剪预览。"
       : sourceLine?.estimated
       ? "暂无可靠定位坐标，请在左栏查看整页原文。"
-      : "当前 block 没有可用坐标预览，可在左栏查看整页原文。";
+      : "当前行没有可用坐标预览，可在左栏查看整页原文。";
     panel.appendChild(fallback);
   }
 
@@ -6698,10 +6698,10 @@ function renderProofreadSourcePanel(sourceLine, index) {
 function renderSourcePreviewScaleControls() {
   const controls = document.createElement("div");
   controls.className = "source-preview-scale-controls";
-  controls.setAttribute("aria-label", "原文 block 预览缩放");
+  controls.setAttribute("aria-label", "原文行预览缩放");
   controls.append(
-    renderSourcePreviewScaleButton("decrease", "zoom-out", "缩小原文 block 预览"),
-    renderSourcePreviewScaleButton("increase", "zoom-in", "放大原文 block 预览"),
+    renderSourcePreviewScaleButton("decrease", "zoom-out", "缩小原文行预览"),
+    renderSourcePreviewScaleButton("increase", "zoom-in", "放大原文行预览"),
   );
   return controls;
 }
@@ -7012,7 +7012,7 @@ function mergeDuplicateSourcePreviews(root) {
     }
     note.hidden = !owner;
     if (owner) {
-    note.textContent = `与 block ${String(Number(owner.dataset.blockIndex) + 1).padStart(2, "0")} 对应同一原文行；识别结果已在 block ${String(Number(owner.dataset.blockIndex) + 1).padStart(2, "0")} 显示。`;
+      note.textContent = `与第 ${Number(owner.dataset.blockIndex) + 1} 行对应同一原文行；识别结果已在第 ${Number(owner.dataset.blockIndex) + 1} 行显示。`;
     } else {
       owners.set(preview.dataset.physicalRowKey, preview);
     }
@@ -7118,7 +7118,7 @@ function formatLineQualityStats(stats) {
 function renderProofreadEditorGroup({ index, side, label, line, peerLine, compare }) {
   const group = document.createElement("div");
   group.className = `proofread-editor-group ${side === "llm" ? "is-ai" : "is-bdrc"}`;
-  const blockNumber = String(index + 1).padStart(2, "0");
+  const blockNumber = index + 1;
   const sourceLabel = side === "llm" ? "Gemini Vision" : "BDRC";
   const regionLabel = line?.regionLabel ? `${line.regionLabel} ` : "";
   const regionLineCount = Number(line?.regionLineCount || 0);
@@ -7126,7 +7126,7 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
   const labelEl = document.createElement("div");
   labelEl.className = "proofread-editor-label";
   const labelTitle = document.createElement("strong");
-  labelTitle.textContent = `${sourceLabel} ${regionLabel}block ${blockNumber} 识别${regionLineCount > 1 ? `（${regionLineCount}行）` : ""}`;
+  labelTitle.textContent = `${sourceLabel} ${regionLabel}第 ${blockNumber} 行识别${regionLineCount > 1 ? `（${regionLineCount}行）` : ""}`;
   const labelMeta = document.createElement("span");
   labelMeta.textContent = `${sourceLabel} 识别结果`;
   const statusEl = document.createElement("em");
@@ -7148,8 +7148,8 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
   editor.spellcheck = false;
   editor.setAttribute("role", "textbox");
   editor.setAttribute("aria-multiline", "true");
-  editor.setAttribute("aria-label", `第 ${index + 1} 个 block 的 ${label}`);
-  editor.dataset.placeholder = `${sourceLabel} block ${blockNumber} 未返回`;
+  editor.setAttribute("aria-label", `第 ${index + 1} 行的 ${label}`);
+  editor.dataset.placeholder = `${sourceLabel} 第 ${blockNumber} 行未返回`;
   editor.dataset.proofreadSide = side;
   editor.dataset.sourceRowIndex = String(index);
   const editorBody = document.createElement("div");
@@ -7392,7 +7392,7 @@ function updateProofreadCompareLine(side, index, value, line, peerLine) {
 function markSelectedSharedError(index, card, expectedProvider = "") {
   const selection = getSelectedProofreadRange(card);
   if (!selection || selection.index !== index || (expectedProvider && (selection.reviewProvider || selection.side) !== expectedProvider)) {
-    setStatus(`请先在当前 block 的${expectedProvider ? proofreadModelName(expectedProvider) : "BDRC、Gemini Vision 或千问/OpenAI 候选"}文字中选中需要标记为“错误”的字母。`, "warn");
+    setStatus(`请先在当前行的${expectedProvider ? proofreadModelName(expectedProvider) : "BDRC、Gemini Vision 或千问/OpenAI 候选"}文字中选中需要标记为“错误”的字母。`, "warn");
     return;
   }
 
@@ -7401,8 +7401,8 @@ function markSelectedSharedError(index, card, expectedProvider = "") {
     if (saved) {
       refreshProofreadErrorMarkDisplay(index, selection.reviewProvider);
       setStatus(saved === true
-        ? `第 ${index + 1} 个 block 的独立候选已标错并保存。`
-        : `第 ${index + 1} 个 block 标错后未能保存，请重试。`, saved === true ? "ok" : "error");
+        ? `第 ${index + 1} 行的独立候选已标错并保存。`
+        : `第 ${index + 1} 行标错后未能保存，请重试。`, saved === true ? "ok" : "error");
     }
     return;
   }
@@ -7447,8 +7447,8 @@ function markSelectedSharedError(index, card, expectedProvider = "") {
   showProofreadAutoSaveStatus(index, saved);
   refreshProofreadErrorMarkDisplay(index);
   setStatus(saved
-    ? `第 ${index + 1} 个 block 已在 ${sourceLabel} 结果中标记“错误”。`
-    : `第 ${index + 1} 个 block 标错后未能保存，请重试。`, saved ? "ok" : "error");
+    ? `第 ${index + 1} 行已在 ${sourceLabel} 结果中标记“错误”。`
+    : `第 ${index + 1} 行标错后未能保存，请重试。`, saved ? "ok" : "error");
 }
 
 function clearSharedErrorMark(index, card, expectedProvider = "") {
@@ -7456,7 +7456,7 @@ function clearSharedErrorMark(index, card, expectedProvider = "") {
   if (expectedProvider && candidateSelection && (
     candidateSelection.index !== index || (candidateSelection.reviewProvider || candidateSelection.side) !== expectedProvider
   )) {
-    setStatus(`请先选择当前 block 的${proofreadModelName(expectedProvider)}文字，或取消选区后撤销该模型的全部标错。`, "warn");
+    setStatus(`请先选择当前行的${proofreadModelName(expectedProvider)}文字，或取消选区后撤销该模型的全部标错。`, "warn");
     return;
   }
   if (expectedProvider === "qwen" || expectedProvider === "openai") {
@@ -7560,8 +7560,8 @@ function clearSharedErrorMark(index, card, expectedProvider = "") {
   showProofreadAutoSaveStatus(index, saved);
   refreshProofreadErrorMarkDisplay(index);
   setStatus(saved
-    ? `已清除第 ${index + 1} 个 block 的“错误”标记。`
-    : `第 ${index + 1} 个 block 撤销标错后未能保存，请重试。`, saved ? "ok" : "error");
+    ? `已清除第 ${index + 1} 行的“错误”标记。`
+    : `第 ${index + 1} 行撤销标错后未能保存，请重试。`, saved ? "ok" : "error");
 }
 
 function saveProofreadBlockChoice(index, side, card) {
@@ -7575,7 +7575,7 @@ function saveProofreadBlockChoice(index, side, card) {
     return false;
   }
   if (candidateProvider && !candidate) {
-    setStatus(`当前 block 没有可采用的${selectedProviderLabel}候选。`, "warn");
+    setStatus(`当前行没有可采用的${selectedProviderLabel}候选。`, "warn");
     return false;
   }
   // Adoption changes only the final transcription, never another model's record.
@@ -7583,7 +7583,7 @@ function saveProofreadBlockChoice(index, side, card) {
   const peerKey = sideKey === "bdrc" ? "llm" : "bdrc";
   const selectedLine = candidate || ensureProofreadLine(compare[sideKey].lines, index, compare[peerKey].lines[index]);
   if (sideKey === "llm" && isDiagnosticOcrLine(selectedLine)) {
-    setStatus("Gemini Vision 当前没有可保存的识别文本；请重新识别，或先手动编辑该 Gemini Vision block。", "warn");
+    setStatus("Gemini Vision 当前没有可保存的识别文本；请重新识别，或先手动编辑该行 Gemini Vision 结果。", "warn");
     return false;
   }
   const peerLine = compare[peerKey].lines[index] || null;
@@ -7640,8 +7640,8 @@ function saveProofreadBlockChoice(index, side, card) {
     }
   }
   setStatus(saved
-    ? `第 ${index + 1} 个 block 已自动采用并保存为 ${selectedProviderLabel} 版本。`
-    : `第 ${index + 1} 个 block 采用 ${selectedProviderLabel} 后未能保存，请重试。`, saved ? "ok" : "error");
+    ? `第 ${index + 1} 行已自动采用并保存为 ${selectedProviderLabel} 版本。`
+    : `第 ${index + 1} 行采用 ${selectedProviderLabel} 后未能保存，请重试。`, saved ? "ok" : "error");
   return saved;
 }
 
@@ -7881,7 +7881,7 @@ function getAiVisionDiagnosticText(compare, index) {
     return explicitText || "Gemini Vision 调用失败；请检查 AI OCR 服务后重新识别当前页。";
   }
   if (hasOcrSideContent(side)) {
-    return `Gemini Vision 未返回 block ${String(index + 1).padStart(2, "0")} 的识别结果；模型可能只返回了前几行，请重新识别当前页。`;
+    return `Gemini Vision 未返回第 ${index + 1} 行的识别结果；模型可能只返回了前几行，请重新识别当前页。`;
   }
   return "Gemini Vision 未返回文本；请重新识别当前页，或检查 18092 AI OCR 服务。";
 }
@@ -7951,7 +7951,7 @@ function renderOcrSourceRows({ lines, peerLines, rowCount, side, compare = null 
     text.classList.toggle("is-empty", Boolean(line.deleted) || !String(line.text || "").trim());
     text.classList.toggle("is-error", Boolean(line.error));
     if (line.deleted) {
-      text.textContent = "此 block 的 OCR 结果已删除";
+      text.textContent = "此行的 OCR 结果已删除";
       row.classList.add("is-deleted");
     } else if (line.error) {
       text.textContent = line.text || "";
@@ -8710,7 +8710,7 @@ function buildProofreadMarkdown(pages, sourceName) {
   return [
     `# ${stripFileExtension(sourceName || "藏文典籍")} 藏文 OCR 校对结果`,
     "",
-    "字数与错误数沿用工作台逐 block 的统计口径；空结果的错误率记为“—”，不代表识别正确。",
+    "字数与错误数沿用工作台逐行的统计口径；空结果的错误率记为“—”，不代表识别正确。",
     "",
     ...pages.flatMap(([pageNum, result]) => buildOcrPageMarkdown(pageNum, result)),
     ...buildOcrModelQualityMarkdown(state.ocrQualityReviews),
@@ -8779,7 +8779,7 @@ function buildOcrPageMarkdown(pageNum, result) {
       continue;
     }
     model.rows.forEach((row, index) => {
-      output.push(`#### block ${String(index + 1).padStart(2, "0")}`, "");
+      output.push(`#### 第 ${index + 1} 行`, "");
       if (row.model) output.push(`识别模型：${row.model}`, "");
       if (row.deleted) output.push("状态：已从采用文本删除，候选结果仍保留。", "");
       output.push(formatOcrExportStats(row.stats.totalChars, row.stats.errorChars), "", ...formatOcrExportText(row.content));
@@ -8788,7 +8788,7 @@ function buildOcrPageMarkdown(pageNum, result) {
   if (compare?.qwenReviewArchive?.length) {
     output.push("### 千问未对齐的旧输出", "", "以下文字保留供核查，不计入已对齐行的字数或错误率。", "");
     for (const review of compare.qwenReviewArchive) {
-      output.push(`原记录 block ${String(review.originalIndex + 1).padStart(2, "0")}`, "", ...formatOcrExportText(review.text));
+      output.push(`原记录第 ${review.originalIndex + 1} 行`, "", ...formatOcrExportText(review.text));
     }
   }
   output.push("### 当前采用的校对文本", "", ...formatOcrExportText(result?.text || ""));
@@ -8861,7 +8861,7 @@ function saveOcrQualityReview({ result, compare, pageNum, blockIndex, text, qual
 
 function buildOcrModelQualityMarkdown(reviews) {
   if (!reviews.length) {
-    return ["## 模型质检统计", "", "尚无已保存的人工审核 block。", ""];
+    return ["## 模型质检统计", "", "尚无已保存的人工审核行。", ""];
   }
   const stats = new Map();
   reviews.forEach((review) => {
@@ -8878,9 +8878,9 @@ function buildOcrModelQualityMarkdown(reviews) {
   return [
     "## 模型质检统计",
     "",
-    "仅统计人工标错或修改后自动保存的 BDRC 与 Gemini Vision block；估算准确率 = 1 - 标错字符数 / 已审核字符数。样本量较小时仅供参考。",
+    "仅统计人工标错或修改后自动保存的 BDRC 与 Gemini Vision 行；估算准确率 = 1 - 标错字符数 / 已审核字符数。样本量较小时仅供参考。",
     "",
-    "| 模型 | 服务 | 已审核 block | 已审核字符 | 标错字符 | 估算准确率 |",
+    "| 模型 | 服务 | 已审核行 | 已审核字符 | 标错字符 | 估算准确率 |",
     "| --- | --- | ---: | ---: | ---: | ---: |",
     ...rows.map((item) => `| ${item.model} | ${item.provider || "-"} | ${item.blockCount} | ${item.reviewedChars} | ${item.errorChars} | ${(item.estimatedAccuracy * 100).toFixed(2)}% |`),
     "",
