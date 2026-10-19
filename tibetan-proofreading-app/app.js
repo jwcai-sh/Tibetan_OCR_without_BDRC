@@ -5973,7 +5973,13 @@ function decorateProofreadModelSection(group, index, provider, card) {
   const header = group.querySelector(".proofread-editor-label");
   const content = group.querySelector(".proofread-editor-body");
   content.classList.add("proofread-model-content");
-  const controls = header.querySelector(".review-provider-controls");
+  let controls = header.querySelector(".review-provider-controls");
+  if (provider === "llm") {
+    controls = document.createElement("div");
+    controls.className = "review-provider-controls";
+    controls.append(renderGeminiRowModelSelector(index));
+    header.querySelector("strong").insertAdjacentElement("afterend", controls);
+  }
   const actions = renderSharedErrorActionGroup(index, card, provider);
   appendProofreadErrorActionsAfterModelSelector(controls, actions, controls ? null : header);
   header.append(makeProofreadModelToggle(index, provider, content));
@@ -6051,6 +6057,32 @@ function getSelectedGeminiModel() {
   return els.geminiModelSelect?.value || REVIEW_MODEL_DEFAULTS.gemini[0];
 }
 
+function syncGeminiRowModelSelectors() {
+  const model = getSelectedGeminiModel();
+  const options = Array.from(els.geminiModelSelect?.options || []);
+  els.ocrLineCompare?.querySelectorAll(".gemini-row-model-select").forEach((select) => {
+    select.replaceChildren(...options.map((item) => new Option(item.textContent, item.value)));
+    select.value = model;
+    select.disabled = els.geminiModelSelect.disabled;
+    select.title = els.geminiModelSelect.title;
+  });
+}
+
+function renderGeminiRowModelSelector(index) {
+  const select = document.createElement("select");
+  select.className = "review-model-select gemini-row-model-select";
+  select.setAttribute("aria-label", `第 ${index + 1} 行 Gemini Vision 识别及整页复核模型`);
+  select.replaceChildren(...Array.from(els.geminiModelSelect.options, (item) => new Option(item.textContent, item.value)));
+  select.value = getSelectedGeminiModel();
+  select.disabled = els.geminiModelSelect.disabled;
+  select.title = els.geminiModelSelect.title;
+  select.addEventListener("change", () => {
+    els.geminiModelSelect.value = select.value;
+    els.geminiModelSelect.dispatchEvent(new Event("change"));
+  });
+  return select;
+}
+
 function initializeGeminiModelSelector() {
   const select = els.geminiModelSelect;
   if (!select) return;
@@ -6068,11 +6100,13 @@ function initializeGeminiModelSelector() {
     }));
     select.value = choices.includes(chosen) ? chosen : choices[0];
     select.disabled = !choices.length;
+    syncGeminiRowModelSelectors();
   };
   fill(REVIEW_MODEL_DEFAULTS.gemini);
   select.addEventListener("change", () => {
     preferred = select.value;
     try { window.localStorage.setItem("tibetan-proofreading-app:gemini-model", select.value); } catch (_) { /* storage optional */ }
+    syncGeminiRowModelSelectors();
   });
   const endpoint = getAiVisionLineReviewEndpoint().replace(/\/line-review$/, "/review-models");
   fetch(endpoint).then(async (response) => {
@@ -6082,8 +6116,10 @@ function initializeGeminiModelSelector() {
     if (!select.isConnected) return;
     if (Array.isArray(catalog.gemini?.models)) fill(catalog.gemini.models);
     select.title = catalog.gemini?.billing_note || "所选模型同时用于 Gemini 识别和整页复核。";
+    syncGeminiRowModelSelectors();
   }).catch((error) => {
     select.title = `模型列表加载失败：${error.message}；当前显示默认模型。`;
+    syncGeminiRowModelSelectors();
   });
 }
 
@@ -9212,6 +9248,7 @@ function setBusy(isBusy) {
   els.ocrButton.disabled = isBusy || !state.pageCount;
   if (els.geminiPageReviewButton) els.geminiPageReviewButton.disabled = isBusy || !state.pageCount || pageReviewPending;
   if (els.geminiModelSelect) els.geminiModelSelect.disabled = isBusy || pageReviewPending;
+  syncGeminiRowModelSelectors();
   setOptionalDisabled("checkOcrButton", isBusy);
   els.ocrButton.querySelector("span").textContent = isBusy ? "识别中" : "识别";
   if (wasBusy && !isBusy && state.ocrResults.get(state.pageNum)?.raw?.line_ocr) updateOcrPanelForPage();

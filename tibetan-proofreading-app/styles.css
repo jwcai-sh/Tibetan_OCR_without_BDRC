@@ -2061,6 +2061,17 @@ body.is-resizing-panes * {
 .proofread-independent-content .openai-review-feedback { padding: 0 12px; }
 .proofread-independent-content .openai-review-candidate { padding: 14px 16px; }
 
+/* Keep Gemini and Qwen row text at the same size and spacing. */
+.proofread-model-section .proofread-editor,
+.proofread-model-section .openai-review-candidate {
+  min-height: 96px;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  font-size: var(--proofread-ocr-font-size, var(--ocr-font-size));
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .proofread-editor-label {
   min-height: 42px;
   padding: 9px 16px;
