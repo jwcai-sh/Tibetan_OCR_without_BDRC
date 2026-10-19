@@ -2072,6 +2072,10 @@ body.is-resizing-panes * {
   line-height: 1.45;
 }
 
+.proofread-model-section.is-qwen .openai-review-candidate {
+  background: #fbfdff;
+}
+
 .proofread-editor-label {
   min-height: 42px;
   padding: 9px 16px;

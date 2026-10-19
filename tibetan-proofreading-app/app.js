@@ -2,7 +2,7 @@ const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_�
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
 const APP_BUILD_ID = "20261013-collaboration-rds-v1";
 let pageReviewPending = false;
-const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
+const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
 const pendingGeminiRowModels = new Map();
 const SOURCE_LAYOUT_VERSION = 4;
@@ -6262,18 +6262,17 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
   const button = document.createElement("button");
   button.type = "button";
   button.className = "ghost-button compact";
-  button.textContent = `${label}整页复核`;
-  button.setAttribute("aria-label", `${label}整页复核，更新本页${label}结果`);
-  button.title = `使用完整原图，一次复核并更新本页中间栏各行${label}结果；裁剪预览仅供人工对照。`;
-  button.disabled = !normalizeBbox(sourceLine?.bbox) || Boolean(sourceLine?.estimated);
+  button.textContent = provider === "qwen" ? "识别" : `${label}整页复核`;
+  button.setAttribute("aria-label", provider === "qwen" ? `使用 qwen3.8-max 识别第 ${index + 1} 行` : `${label}整页复核，更新本页${label}结果`);
+  button.title = provider === "qwen"
+    ? "使用 qwen3.8-max 和完整原图识别本行；保留已采用的校对文本。"
+    : `使用完整原图，一次复核并更新本页中间栏各行${label}结果；裁剪预览仅供人工对照。`;
+  const targetLine = getSourceLineForRow(sourceLine, aiLine);
+  button.disabled = !normalizeBbox(targetLine?.bbox) || Boolean(targetLine?.estimated);
   const feedback = document.createElement("div");
   feedback.className = "openai-review-feedback";
   feedback.setAttribute("role", "status");
   controls.append(button);
-  const select = provider === "qwen" ? renderReviewModelSelector("qwen", index, (catalog) => {
-    if (!catalog?.configured && !button.disabled) feedback.textContent = "当前 AI OCR 服务未读取到千问 API key 或接口地址，请检查服务状态与本地配置。";
-  }) : null;
-  if (select) controls.append(select);
   group.append(controls, feedback);
   const candidate = getOcrSourceCompare(state.ocrResults.get(state.pageNum))?.[reviewKey]?.find((review) => review.index === index);
   if (candidate) {
@@ -6290,7 +6289,9 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
       group.append(warning);
     }
     const text = document.createElement("div");
-    text.className = "tibetan-text openai-review-candidate";
+    text.className = provider === "qwen"
+      ? "tibetan-text proofread-editor proofread-result-editor openai-review-candidate"
+      : "tibetan-text openai-review-candidate";
     text.contentEditable = "true";
     text.spellcheck = false;
     text.setAttribute("role", "textbox");
@@ -6370,11 +6371,64 @@ function renderIndependentLineReview(provider, index, sourceLine, bdrcLine, aiLi
       feedback.textContent = "请先停止批量识别，再复核单行。";
       return;
     }
-    await reviewProviderWholePage(provider, button, select, feedback);
+    if (provider === "qwen") await recognizeQwenRow(index, sourceLine, aiLine, button, feedback);
+    else await reviewProviderWholePage(provider, button, null, feedback);
     return;
 
   });
   return group;
+}
+
+async function recognizeQwenRow(index, sourceLine, aiLine, button, feedback) {
+  if (pageReviewPending || state.isOcrBusy) return;
+  const pageNum = state.pageNum;
+  const sourceKey = state.cacheKey;
+  const result = state.ocrResults.get(pageNum);
+  const before = JSON.stringify(result);
+  const compare = getOcrSourceCompare(result);
+  const source = getSourceLineForRow(sourceLine, compare?.llm?.lines[index] || aiLine);
+  const bbox = normalizeBbox(source?.bbox);
+  if (!bbox || source?.estimated) {
+    feedback.textContent = `第 ${index + 1} 行缺少准确原文位置，原结果保留。`;
+    return;
+  }
+  const endpoint = getAiVisionLineReviewEndpoint().replace(/\/line-review$/, "/qwen-line-review");
+  pageReviewPending = true;
+  button.disabled = true;
+  feedback.textContent = `正在用 qwen3.8-max 识别第 ${pageNum} 页第 ${index + 1} 行…`;
+  try {
+    const blob = await getCurrentPageImageBlob();
+    if (state.pageNum !== pageNum || state.cacheKey !== sourceKey) throw new Error("页面已切换，原结果保留。");
+    const form = new FormData();
+    form.append("file", blob, makePageImageName());
+    form.append("bbox", JSON.stringify(bbox));
+    form.append("model", "qwen3.8-max");
+    const response = await fetchOcrWithTransientRetry(endpoint, form, true);
+    const payload = await parseOcrResponse(response);
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    if (payload.provider !== "qwen" || payload.model !== "qwen3.8-max") {
+      throw new Error("返回模型不是 qwen3.8-max，原结果保留。");
+    }
+    const text = normalizeOcrTextSpacing(validateIndependentReviewText(payload.text || payload.lines?.[0]?.text));
+    if (state.pageNum !== pageNum || state.cacheKey !== sourceKey || state.ocrResults.get(pageNum) !== result || JSON.stringify(result) !== before) {
+      throw new Error("页面或校对结果已改变，原结果保留。");
+    }
+    const updated = getOcrSourceCompare(result);
+    const candidate = {index, text, bbox, provider: "qwen", model: "qwen3.8-max", recognitionScope: "single-line", reviewedAt: new Date().toISOString()};
+    updated.qwenReviews = [...(updated.qwenReviews || []).filter((review) => review.index !== index), candidate];
+    result.compare = updated;
+    result.updatedAt = new Date().toISOString();
+    const saved = saveCachedResults({immediateRemote: true});
+    if (saved === false) throw new Error("本地保存失败，请检查浏览器存储空间。");
+    await saved;
+    if (state.pageNum === pageNum) updateOcrPanelForPage();
+    setStatus(`第 ${pageNum} 页第 ${index + 1} 行千问候选已用 qwen3.8-max 更新；已采用的校对文本保留。`, "ok");
+  } catch (error) {
+    feedback.textContent = `第 ${index + 1} 行千问识别失败：${error.message || error}`;
+  } finally {
+    pageReviewPending = false;
+    if (button.isConnected) button.disabled = false;
+  }
 }
 
 function collectCenterPageReviewRows(result) {
