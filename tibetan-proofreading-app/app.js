@@ -4,6 +4,7 @@ const APP_BUILD_ID = "20261013-collaboration-rds-v1";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max", "qwen3.7-plus"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 const reviewCatalogRequests = new Map();
+const pendingGeminiRowModels = new Map();
 const SOURCE_LAYOUT_VERSION = 4;
 window.__TIBETAN_PROOFREADING_APP_BUILD_ID__ = APP_BUILD_ID;
 const CACHE_PREFIX = "tibetan-proofreading-app:v1:";
@@ -503,13 +504,13 @@ function wireEvents() {
   els.pageViewport.addEventListener("click", handleSourceViewportClick);
   els.ocrModeSelect.addEventListener("change", () => {
     const mode = getOcrMode();
-    setStatus(mode === "bdrc" ? "已切换到 BDRC 识别。" : "已切换到 Gemini Vision 识别。", "ok");
+    setStatus(mode === "bdrc" ? "已切换到 BDRC 识别。" : "已切换到 Gemini 识别。", "ok");
   });
   els.ocrProfileSelect.addEventListener("change", () => {
     const profile = getSelectedOcrProfile();
     state.ocrProfile = profile.id;
     saveCachedResults();
-    setStatus(`资料类型已切换为“${profile.label}”，下次将使用 Gemini Vision 识别。`, "ok");
+    setStatus(`资料类型已切换为“${profile.label}”，下次将使用 Gemini 识别。`, "ok");
   });
   bindOptionalClick("checkTranslateButton", checkTranslateService);
   els.ocrButton.addEventListener("click", runOcrForCurrentPage);
@@ -2002,7 +2003,7 @@ function configurePdfJs() {
 function warnIfFileProtocol() {
   if (window.location.protocol !== "file:") return;
   setStatus(
-    "当前通过 file:// 打开，PDF worker、缓存和本地 OCR/Gemini Vision 接口可能不稳定；请使用 http://127.0.0.1:8790/tibetan-proofreading-app/ 打开。",
+    "当前通过 file:// 打开，PDF worker、缓存和本地 OCR/Gemini 接口可能不稳定；请使用 http://127.0.0.1:8790/tibetan-proofreading-app/ 打开。",
     "error"
   );
 }
@@ -2124,8 +2125,8 @@ function togglePaneCollapsed(pane) {
 function updatePaneCollapseButtons() {
   const labels = {
     viewer: ["原文栏", "panel-left"],
-    ocr: ["Gemini Vision OCR 栏", "panel-left"],
-    ai: ["Gemini Vision 栏", "panel-right"],
+    ocr: ["Gemini OCR 栏", "panel-left"],
+    ai: ["Gemini 栏", "panel-right"],
   };
   [...(els.paneCollapseButtons || []), els.viewerDividerToggle].filter(Boolean).forEach((button) => {
     const pane = button.dataset.collapsePane;
@@ -3333,7 +3334,7 @@ function getResultSourceLabel(result) {
     case "bdrc":
       return "BDRC OCR";
     case "ai-vision":
-      return "Gemini Vision";
+      return "Gemini";
     case "bdrc-ai":
       return "智能识别";
     default:
@@ -3648,9 +3649,9 @@ async function runOcrForCurrentPage(options = {}) {
 
   const profile = getSelectedOcrProfile();
   const endpoint = els.aiOcrEndpointInput.value.trim();
-  const engineLabel = "Gemini Vision";
+  const engineLabel = "Gemini";
   if (!endpoint) {
-    setStatus("请填写 Gemini Vision OCR 接口地址。", "warn");
+    setStatus("请填写 Gemini OCR 接口地址。", "warn");
     return;
   }
 
@@ -3709,7 +3710,7 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
   }
   if (!rows.length) throw new Error("未检测到中间栏文字行，原结果保留。");
   if (state.pageNum !== pageNum || state.cacheKey !== sourceKey) throw new Error("页面已切换，请返回原页重试。");
-  setStatus(`Gemini Vision 正在读取整页原图并识别中间栏 ${rows.length} 行…`, "warn");
+  setStatus(`Gemini 正在读取整页原图并识别中间栏 ${rows.length} 行…`, "warn");
   const payload = await requestWholePageReview(endpoint.replace(/\/ocr\/?$/, "/gemini-page-review"), blob, rows, selectedModel);
   const reviewed = mergePageReviews([], payload, rows, "gemini");
   if (state.pageNum !== pageNum || state.cacheKey !== sourceKey || state.ocrResults.get(pageNum) !== original || JSON.stringify(original) !== before) {
@@ -3737,12 +3738,12 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
     state.ocrResults.set(pageNum, {text, lines, raw: payload, source: "ai-vision",
       ocrProfile: "traditional", updatedAt: new Date().toISOString(),
       compare: normalizeOcrCompare({bdrc: {label:"BDRC", text:"", lines:[]},
-        llm: {label:"Gemini Vision", text, lines, model:payload.model, provider:"gemini"}})});
+        llm: {label:"Gemini", text, lines, model:payload.model, provider:"gemini"}})});
   }
   await saveCachedResults({immediateRemote: true});
   if (state.pageNum === pageNum) updateOcrPanelForPage();
   updateSummary();
-  setStatus(`第 ${pageNum} 页 Gemini Vision 整页识别已保存（中间栏 ${reviewed.length} 行）。`, "ok");
+  setStatus(`第 ${pageNum} 页 Gemini 整页识别已保存（中间栏 ${reviewed.length} 行）。`, "ok");
 }
 
 function hasValidPageOcr(result) {
@@ -4014,7 +4015,7 @@ function assertSupportedAiVisionResponse(parsed) {
   const provider = getOcrResponseProvider(parsed?.raw).toLowerCase();
   if (provider === "mathpix" || model.includes("mathpix")) {
     throw new Error(
-      "Gemini Vision 已拒绝 Mathpix 结果：Mathpix 主要用于数学公式，不适合作为藏文 OCR 模型。请使用 Gemini 重新识别。"
+      "Gemini 已拒绝 Mathpix 结果：Mathpix 主要用于数学公式，不适合作为藏文 OCR 模型。请使用 Gemini 重新识别。"
     );
   }
 }
@@ -4038,7 +4039,7 @@ function matchStoredOcrRow(line, rows, used = new Set()) {
 function mergeRecognizedModelResults(previous, incoming, source, incomingLines, incomingText) {
   const target = source === 'bdrc' ? 'bdrc' : 'llm';
   const fresh = normalizeOcrCompare(incoming) || normalizeOcrCompare({
-    [target]: {label: target === 'bdrc' ? 'BDRC' : 'Gemini Vision', text: incomingText, lines: incomingLines},
+    [target]: {label: target === 'bdrc' ? 'BDRC' : 'Gemini', text: incomingText, lines: incomingLines},
   });
   if (!previous || !fresh) return fresh;
   const rows = incomingLines.map(line=>({...line}));
@@ -4136,14 +4137,14 @@ function saveSmartOcrCompareResult({ bdrcParsed, aiParsed = null, aiError = "", 
     ? (aiRawLines.length ? aiRawLines : makeOcrLinesFromText(aiText))
     : aiPending
       ? [{
-          text: "Gemini Vision 正在识别...",
+          text: "Gemini 正在识别...",
           bbox: null,
           index: 0,
           diagnostic: true,
           pending: true,
         }]
     : [{
-        text: aiError || "Gemini Vision 未返回文本。",
+        text: aiError || "Gemini 未返回文本。",
         bbox: null,
         index: 0,
         error: true,
@@ -4159,10 +4160,10 @@ function saveSmartOcrCompareResult({ bdrcParsed, aiParsed = null, aiError = "", 
     text: aiText || bdrcText,
     compare: {
       note: bdrcError
-        ? "BDRC 初稿不可用，已在左栏显示原因；右栏为 Gemini Vision 识别结果。"
+        ? "BDRC 初稿不可用，已在左栏显示原因；右栏为 Gemini 识别结果。"
         : aiError
-        ? "右栏 Gemini Vision / LLM 未返回可用文本，已显示失败原因；左栏 BDRC 初稿仍可继续人工校对。"
-        : "左栏为 BDRC OCR 初稿，右栏为 Gemini Vision / LLM 识别或复核结果。",
+        ? "右栏 Gemini / LLM 未返回可用文本，已显示失败原因；左栏 BDRC 初稿仍可继续人工校对。"
+        : "左栏为 BDRC OCR 初稿，右栏为 Gemini / LLM 识别或复核结果。",
       bdrc: {
         label: "BDRC",
         text: bdrcText,
@@ -4170,7 +4171,7 @@ function saveSmartOcrCompareResult({ bdrcParsed, aiParsed = null, aiError = "", 
         error: Boolean(bdrcError),
       },
       llm: {
-        label: "Gemini Vision / LLM",
+        label: "Gemini / LLM",
         text: aiText,
         lines: aiLines,
         error: Boolean(aiError),
@@ -5422,14 +5423,14 @@ async function copyCurrentText() {
 async function copyCurrentAiText() {
   const text = getCurrentAiOcrText();
   if (!text.trim()) {
-    setStatus("当前页没有 Gemini Vision OCR 文本可复制。", "warn");
+    setStatus("当前页没有 Gemini OCR 文本可复制。", "warn");
     return;
   }
   try {
     await navigator.clipboard.writeText(text);
-    setStatus("当前页 Gemini Vision OCR 文本已复制。", "ok");
+    setStatus("当前页 Gemini OCR 文本已复制。", "ok");
   } catch {
-    setStatus("浏览器剪贴板不可用，请在 Gemini Vision 栏手动选择复制。", "warn");
+    setStatus("浏览器剪贴板不可用，请在 Gemini 栏手动选择复制。", "warn");
   }
 }
 
@@ -5630,7 +5631,7 @@ function renderProofreadMergedView() {
   if (!state.pageCount) {
     const empty = document.createElement("div");
     empty.className = "line-compare-empty";
-    empty.innerHTML = "<strong>等待加载文件</strong><span>加载 PDF 或图片后，这里会逐行显示原文和 Gemini Vision 结果。</span>";
+    empty.innerHTML = "<strong>等待加载文件</strong><span>加载 PDF 或图片后，这里会逐行显示原文和 Gemini 结果。</span>";
     els.ocrLineCompare.appendChild(empty);
     renderAiOcrPanelForPage();
     return;
@@ -5651,7 +5652,7 @@ function renderProofreadMergedView() {
   if (!rowCount) {
     const empty = document.createElement("div");
     empty.className = "line-compare-empty";
-    empty.innerHTML = "<strong>等待识别</strong><span>点击“识别”后，每行原文下方会出现可编辑的 Gemini Vision 结果。</span>";
+    empty.innerHTML = "<strong>等待识别</strong><span>点击“识别”后，每行原文下方会出现可编辑的 Gemini 结果。</span>";
     els.ocrLineCompare.appendChild(empty);
     return;
   }
@@ -5810,7 +5811,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
   const choiceSelect = renderProofreadChoiceSelect(
     index,
     savedSide,
-    aiLine.provider === "qwen" ? "千问候选" : aiLine.provider === "openai" ? "OpenAI 候选" : "Gemini Vision",
+    aiLine.provider === "qwen" ? "千问候选" : aiLine.provider === "openai" ? "OpenAI 候选" : "Gemini",
     compare,
     showGemini,
   );
@@ -5835,7 +5836,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
     renderProofreadEditorGroup({
       index,
       side: "llm",
-      label: "Gemini Vision 识别",
+      label: "Gemini 识别",
       line: aiLine,
       peerLine: bdrcLine,
       compare,
@@ -5843,7 +5844,7 @@ function renderProofreadBlockCard({ index, bdrcLine, aiLine, finalLine, sourceLi
   );
 
   stack.querySelectorAll(".proofread-editor-group").forEach((group) => {
-    decorateProofreadModelSection(group, index, group.classList.contains("is-bdrc") ? "bdrc" : "llm", card);
+    decorateProofreadModelSection(group, index, group.classList.contains("is-bdrc") ? "bdrc" : "llm", card, sourceLine, aiLine, compare);
   });
   stack.append(
     decorateIndependentProofreadModelSection(renderQwenLineReview(index, sourceLine, bdrcLine, aiLine), index, "qwen", card),
@@ -5893,7 +5894,7 @@ function makeProofreadAiLine(compare, rawAiLine, index, fallbackBbox = null) {
   return line;
 }
 
-function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini Vision", compare = null, showGemini = true) {
+function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini", compare = null, showGemini = true) {
   const control = document.createElement("label");
   control.className = "proofread-choice-select-control";
   const label = document.createElement("span");
@@ -5930,7 +5931,7 @@ function renderSharedErrorActionGroup(index, card, provider) {
 }
 
 function appendProofreadErrorActionsAfterModelSelector(controls, actions, fallbackHeader = null) {
-  const selector = controls?.querySelector(".review-model-select");
+  const selector = controls?.querySelector(".gemini-row-recognize-button") || controls?.querySelector(".review-model-select");
   if (selector) selector.insertAdjacentElement("afterend", actions);
   else if (fallbackHeader) {
     const title = fallbackHeader.querySelector("strong");
@@ -5943,7 +5944,7 @@ function appendProofreadErrorActionsAfterModelSelector(controls, actions, fallba
 const collapsedProofreadModels = new Set();
 
 function proofreadModelName(provider) {
-  return {bdrc:"BDRC", llm:"Gemini Vision", qwen:"千问", openai:"OpenAI"}[provider] || provider;
+  return {bdrc:"BDRC", llm:"Gemini", qwen:"千问", openai:"OpenAI"}[provider] || provider;
 }
 
 function makeProofreadModelToggle(index, provider, content) {
@@ -5969,7 +5970,7 @@ function makeProofreadModelToggle(index, provider, content) {
   return button;
 }
 
-function decorateProofreadModelSection(group, index, provider, card) {
+function decorateProofreadModelSection(group, index, provider, card, sourceLine, aiLine, compare) {
   const header = group.querySelector(".proofread-editor-label");
   const content = group.querySelector(".proofread-editor-body");
   content.classList.add("proofread-model-content");
@@ -5977,7 +5978,22 @@ function decorateProofreadModelSection(group, index, provider, card) {
   if (provider === "llm") {
     controls = document.createElement("div");
     controls.className = "review-provider-controls";
-    controls.append(renderGeminiRowModelSelector(index));
+    const recognizedModel = String(aiLine?.model || compare?.llm?.model || "").split(":").pop();
+    const select = renderGeminiRowModelSelector(index, recognizedModel);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost-button compact gemini-row-recognize-button";
+    button.textContent = "重新识别";
+    button.setAttribute("aria-label", `使用所选 Gemini 模型重新识别第 ${index + 1} 行`);
+    button.title = "只更新本行 Gemini 识别候选，保留已采用的校对文本。";
+    const bbox = normalizeBbox(getSourceLineForRow(sourceLine, aiLine)?.bbox);
+    select.dataset.hasSourceBbox = String(Boolean(bbox && !sourceLine?.estimated));
+    controls.append(select, button);
+    updateGeminiRowRecognizeButton(select);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void reRecognizeGeminiRow(index, select, sourceLine, aiLine);
+    });
     header.querySelector("strong").insertAdjacentElement("afterend", controls);
   }
   const actions = renderSharedErrorActionGroup(index, card, provider);
@@ -6006,7 +6022,7 @@ function decorateIndependentProofreadModelSection(group, index, provider, card) 
 function renderReviewModelSelector(provider, index, onCatalog = null) {
   const select = document.createElement("select");
   select.className = "review-model-select";
-  select.setAttribute("aria-label", `第 ${index + 1} 行 ${provider === "qwen" ? "千问" : "Gemini Vision"}复核模型`);
+  select.setAttribute("aria-label", `第 ${index + 1} 行 ${provider === "qwen" ? "千问" : "Gemini"}复核模型`);
   const preferenceKey = `tibetan-proofreading-app:review-model:${provider}:${state.cacheKey}:${state.pageNum}:${index}`;
   let preferred = "";
   try { preferred = window.localStorage.getItem(preferenceKey) || ""; } catch (_) { /* storage optional */ }
@@ -6057,28 +6073,41 @@ function getSelectedGeminiModel() {
   return els.geminiModelSelect?.value || REVIEW_MODEL_DEFAULTS.gemini[0];
 }
 
-function syncGeminiRowModelSelectors() {
-  const model = getSelectedGeminiModel();
+function updateGeminiRowRecognizeButton(select) {
+  const button = select.parentElement?.querySelector(".gemini-row-recognize-button");
+  if (!button?.classList.contains("gemini-row-recognize-button")) return;
+  button.hidden = !select.value || select.value === select.dataset.recognizedModel;
+  button.disabled = state.isOcrBusy || pageReviewPending || select.dataset.hasSourceBbox !== "true";
+}
+
+function refreshGeminiRowModelSelectors() {
   const options = Array.from(els.geminiModelSelect?.options || []);
   els.ocrLineCompare?.querySelectorAll(".gemini-row-model-select").forEach((select) => {
+    const chosen = select.value;
     select.replaceChildren(...options.map((item) => new Option(item.textContent, item.value)));
-    select.value = model;
-    select.disabled = els.geminiModelSelect.disabled;
+    select.value = options.some((item) => item.value === chosen) ? chosen : getSelectedGeminiModel();
+    select.disabled = state.isOcrBusy || pageReviewPending || !options.length;
     select.title = els.geminiModelSelect.title;
+    updateGeminiRowRecognizeButton(select);
   });
 }
 
-function renderGeminiRowModelSelector(index) {
+function renderGeminiRowModelSelector(index, recognizedModel) {
   const select = document.createElement("select");
   select.className = "review-model-select gemini-row-model-select";
-  select.setAttribute("aria-label", `第 ${index + 1} 行 Gemini Vision 识别及整页复核模型`);
+  select.setAttribute("aria-label", `第 ${index + 1} 行 Gemini 重新识别模型`);
   select.replaceChildren(...Array.from(els.geminiModelSelect.options, (item) => new Option(item.textContent, item.value)));
-  select.value = getSelectedGeminiModel();
-  select.disabled = els.geminiModelSelect.disabled;
+  const key = JSON.stringify([state.cacheKey, state.pageNum, index]);
+  const initialModel = recognizedModel || getSelectedGeminiModel();
+  const requestedModel = pendingGeminiRowModels.get(key) || initialModel;
+  select.value = Array.from(select.options).some((item) => item.value === requestedModel) ? requestedModel : getSelectedGeminiModel();
+  select.dataset.recognizedModel = initialModel;
+  select.disabled = state.isOcrBusy || pageReviewPending;
   select.title = els.geminiModelSelect.title;
   select.addEventListener("change", () => {
-    els.geminiModelSelect.value = select.value;
-    els.geminiModelSelect.dispatchEvent(new Event("change"));
+    if (select.value === initialModel) pendingGeminiRowModels.delete(key);
+    else pendingGeminiRowModels.set(key, select.value);
+    updateGeminiRowRecognizeButton(select);
   });
   return select;
 }
@@ -6100,13 +6129,12 @@ function initializeGeminiModelSelector() {
     }));
     select.value = choices.includes(chosen) ? chosen : choices[0];
     select.disabled = !choices.length;
-    syncGeminiRowModelSelectors();
+    refreshGeminiRowModelSelectors();
   };
   fill(REVIEW_MODEL_DEFAULTS.gemini);
   select.addEventListener("change", () => {
     preferred = select.value;
     try { window.localStorage.setItem("tibetan-proofreading-app:gemini-model", select.value); } catch (_) { /* storage optional */ }
-    syncGeminiRowModelSelectors();
   });
   const endpoint = getAiVisionLineReviewEndpoint().replace(/\/line-review$/, "/review-models");
   fetch(endpoint).then(async (response) => {
@@ -6116,10 +6144,10 @@ function initializeGeminiModelSelector() {
     if (!select.isConnected) return;
     if (Array.isArray(catalog.gemini?.models)) fill(catalog.gemini.models);
     select.title = catalog.gemini?.billing_note || "所选模型同时用于 Gemini 识别和整页复核。";
-    syncGeminiRowModelSelectors();
+    refreshGeminiRowModelSelectors();
   }).catch((error) => {
     select.title = `模型列表加载失败：${error.message}；当前显示默认模型。`;
-    syncGeminiRowModelSelectors();
+    refreshGeminiRowModelSelectors();
   });
 }
 
@@ -6132,12 +6160,13 @@ async function reviewGeminiCurrentPage() {
   }
   const endpoint = els.aiOcrEndpointInput.value.trim();
   if (!endpoint) {
-    setStatus("Gemini Vision 服务地址未配置。", "warn");
+    setStatus("Gemini 服务地址未配置。", "warn");
     return;
   }
   pageReviewPending = true;
   button.disabled = true;
   els.geminiModelSelect.disabled = true;
+  refreshGeminiRowModelSelectors();
   try {
     const blob = await getCurrentPageImageBlob();
     await runTraditionalGeminiLines(endpoint, blob, getSelectedGeminiModel());
@@ -6147,6 +6176,71 @@ async function reviewGeminiCurrentPage() {
     pageReviewPending = false;
     button.disabled = false;
     els.geminiModelSelect.disabled = false;
+    refreshGeminiRowModelSelectors();
+  }
+}
+
+async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
+  if (pageReviewPending || state.isOcrBusy || state.batchOcr?.running) return;
+  const pageNum = state.pageNum;
+  const sourceKey = state.cacheKey;
+  const result = state.ocrResults.get(pageNum);
+  const before = JSON.stringify(result);
+  const compare = getOcrSourceCompare(result);
+  const source = getSourceLineForRow(sourceLine, compare?.llm?.lines[index] || aiLine);
+  const bbox = normalizeBbox(source?.bbox);
+  const endpoint = getAiVisionLineReviewEndpoint();
+  if (!bbox || source?.estimated) {
+    setStatus(`第 ${index + 1} 行缺少准确原文位置，原结果保留。`, "warn");
+    return;
+  }
+  if (!endpoint) {
+    setStatus("Gemini OCR 接口地址未配置。", "warn");
+    return;
+  }
+  const model = select.value;
+  pageReviewPending = true;
+  setBusy(true);
+  setStatus(`正在用 ${model} 重新识别第 ${pageNum} 页第 ${index + 1} 行…`, "warn");
+  try {
+    const blob = await getCurrentPageImageBlob();
+    if (state.pageNum !== pageNum || state.cacheKey !== sourceKey) throw new Error("页面已切换，原结果保留。");
+    const payload = await callAiVisionLineReviewEndpoint(endpoint, blob, bbox,
+      compare?.llm?.lines[index]?.text || "", model, null, source?.regionId || "center");
+    const text = normalizeOcrTextSpacing(validateIndependentReviewText(payload.text || payload.lines?.[0]?.text));
+    if (payload.model && String(payload.model).split(":").pop() !== model) {
+      throw new Error("返回模型与所选模型不一致，原结果保留。");
+    }
+    if (state.pageNum !== pageNum || state.cacheKey !== sourceKey || state.ocrResults.get(pageNum) !== result || JSON.stringify(result) !== before) {
+      throw new Error("页面或校对结果已改变，原结果保留。");
+    }
+    const updated = getOcrSourceCompare(result);
+    const previous = updated?.llm?.lines[index];
+    if (!previous) throw new Error("本行 Gemini 候选不存在，原结果保留。");
+    updated.llm.lines[index] = {
+      ...previous, text, model: payload.model || `gemini:${model}`, provider: "gemini",
+      error: false, missing: false, diagnostic: false, recognitionError: "",
+      manualBaselineText: undefined, manuallyEdited: false, manualErrorChars: 0, manualEditRanges: [],
+    };
+    updated.sharedErrors = normalizeSharedErrorMarks((updated.sharedErrors || []).map((mark) =>
+      mark.blockIndex === index ? {...mark, llmRanges: []} : mark
+    ).filter((mark) => mark.bdrcRanges?.length || mark.llmRanges?.length));
+    updated.llm.text = joinActiveOcrLines(updated.llm.lines);
+    updated.llm.returnedLineCount = countNonEmptyOcrLines(updated.llm.lines);
+    result.compare = updated;
+    result.updatedAt = new Date().toISOString();
+    pendingGeminiRowModels.delete(JSON.stringify([sourceKey, pageNum, index]));
+    setStatus(`第 ${pageNum} 页第 ${index + 1} 行 Gemini 候选已用 ${model} 更新；已采用的校对文本保留。`, "ok");
+    const saved = saveCachedResults({immediateRemote: true});
+    if (saved === false) throw new Error("本地保存失败，请检查浏览器存储空间。");
+    await saved;
+    if (state.pageNum === pageNum) updateOcrPanelForPage();
+  } catch (error) {
+    setStatus(`第 ${pageNum} 页第 ${index + 1} 行重新识别失败：${error.message || error}`, "error");
+  } finally {
+    pageReviewPending = false;
+    setBusy(false);
+    refreshGeminiRowModelSelectors();
   }
 }
 
@@ -7155,7 +7249,7 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
   const group = document.createElement("div");
   group.className = `proofread-editor-group ${side === "llm" ? "is-ai" : "is-bdrc"}`;
   const blockNumber = index + 1;
-  const sourceLabel = side === "llm" ? "Gemini Vision" : "BDRC";
+  const sourceLabel = side === "llm" ? "Gemini" : "BDRC";
   const regionLabel = line?.regionLabel ? `${line.regionLabel} ` : "";
   const regionLineCount = Number(line?.regionLineCount || 0);
 
@@ -7428,7 +7522,7 @@ function updateProofreadCompareLine(side, index, value, line, peerLine) {
 function markSelectedSharedError(index, card, expectedProvider = "") {
   const selection = getSelectedProofreadRange(card);
   if (!selection || selection.index !== index || (expectedProvider && (selection.reviewProvider || selection.side) !== expectedProvider)) {
-    setStatus(`请先在当前行的${expectedProvider ? proofreadModelName(expectedProvider) : "BDRC、Gemini Vision 或千问/OpenAI 候选"}文字中选中需要标记为“错误”的字母。`, "warn");
+    setStatus(`请先在当前行的${expectedProvider ? proofreadModelName(expectedProvider) : "BDRC、Gemini 或千问/OpenAI 候选"}文字中选中需要标记为“错误”的字母。`, "warn");
     return;
   }
 
@@ -7445,7 +7539,7 @@ function markSelectedSharedError(index, card, expectedProvider = "") {
 
   const { result, compare } = ensureProofreadCompareResult();
   const sideKey = selection.side === "bdrc" ? "bdrc" : "llm";
-  const sourceLabel = sideKey === "bdrc" ? "BDRC" : "Gemini Vision";
+  const sourceLabel = sideKey === "bdrc" ? "BDRC" : "Gemini";
   const selectedLine = ensureProofreadLine(compare[sideKey].lines, index);
   const sourceText = String(selectedLine.text || "");
   const start = clamp(selection.start, 0, sourceText.length);
@@ -7602,7 +7696,7 @@ function clearSharedErrorMark(index, card, expectedProvider = "") {
 
 function saveProofreadBlockChoice(index, side, card) {
   const { result, compare } = ensureProofreadCompareResult();
-  const selectedProviderLabel = side === "qwen" ? "千问" : side === "openai" ? "OpenAI" : side === "llm" ? "Gemini Vision" : "BDRC";
+  const selectedProviderLabel = side === "qwen" ? "千问" : side === "openai" ? "OpenAI" : side === "llm" ? "Gemini" : "BDRC";
   const candidateProvider = side === "qwen" || side === "openai" ? side : "";
   const candidate = candidateProvider
     ? compare[`${candidateProvider}Reviews`]?.find((review) => review.index === index) : null;
@@ -7619,7 +7713,7 @@ function saveProofreadBlockChoice(index, side, card) {
   const peerKey = sideKey === "bdrc" ? "llm" : "bdrc";
   const selectedLine = candidate || ensureProofreadLine(compare[sideKey].lines, index, compare[peerKey].lines[index]);
   if (sideKey === "llm" && isDiagnosticOcrLine(selectedLine)) {
-    setStatus("Gemini Vision 当前没有可保存的识别文本；请重新识别，或先手动编辑该行 Gemini Vision 结果。", "warn");
+    setStatus("Gemini 当前没有可保存的识别文本；请重新识别，或先手动编辑该行 Gemini 结果。", "warn");
     return false;
   }
   const peerLine = compare[peerKey].lines[index] || null;
@@ -7684,9 +7778,9 @@ function saveProofreadBlockChoice(index, side, card) {
 function getCurrentOcrCompareOrEmpty() {
   if (!state.pageCount) {
     return {
-      note: "请先加载 PDF 或图片；选择“智能（BDRC + LLM）”识别后，BDRC 与 Gemini Vision 会分别显示在两个独立栏。",
+      note: "请先加载 PDF 或图片；选择“智能（BDRC + LLM）”识别后，BDRC 与 Gemini 会分别显示在两个独立栏。",
       bdrc: normalizeOcrCompareSide({ label: "BDRC", text: "", lines: [] }),
-      llm: normalizeOcrCompareSide({ label: "Gemini Vision / LLM", text: "", lines: [] }),
+      llm: normalizeOcrCompareSide({ label: "Gemini / LLM", text: "", lines: [] }),
     };
   }
 
@@ -7705,7 +7799,7 @@ function renderOcrSourceSide(container, sideData, peerData, side, compare = null
     empty.className = "line-compare-empty";
     const message = side === "bdrc"
       ? "BDRC OCR 结果会显示在这里。"
-      : "Gemini Vision OCR 结果会显示在这里。";
+      : "Gemini OCR 结果会显示在这里。";
     empty.innerHTML = `<strong>等待结果</strong><span>${message}</span>`;
     container.appendChild(empty);
     return;
@@ -7781,7 +7875,8 @@ function isAiOnlyMode() {
 }
 
 function isCurrentGeminiResult(side) {
-  return String(side?.model || "").split(":").pop() === "gemini-3.8-flash";
+  const model = String(side?.model || side?.lines?.find((line) => line?.model)?.model || "").split(":").pop();
+  return model.startsWith("gemini-");
 }
 
 function getVisibleServerCompare(compare) {
@@ -7796,10 +7891,10 @@ function getVisibleServerCompare(compare) {
 
 function getAiOnlyDisplayCompare(compare) {
   if (!compare || !isAiOnlyMode()) return compare;
-  const llm = normalizeOcrCompareSide(compare.llm || { label: "Gemini Vision / LLM", text: "", lines: [] });
+  const llm = normalizeOcrCompareSide(compare.llm || { label: "Gemini / LLM", text: "", lines: [] });
   return {
     ...compare,
-    note: "当前仅显示 Gemini Vision 识别结果。",
+    note: "当前仅显示 Gemini 识别结果。",
     bdrc: normalizeOcrCompareSide({ label: "BDRC", text: "", lines: [] }),
     llm,
   };
@@ -7812,11 +7907,11 @@ function makeAiOnlyCompareWithBdrcDiagnostic(result) {
   if (!aiText && !aiLines.length) return null;
 
   const bdrcError = isCloudDeployment()
-    ? "Zeabur 线上服务未配置 BDRC_OCR_UPSTREAM_URL，当前只能显示 Gemini Vision 识别结果。"
-    : "当前页只有 Gemini Vision 结果；请切换到智能识别并确认 BDRC 服务可用后重新识别。";
+    ? "Zeabur 线上服务未配置 BDRC_OCR_UPSTREAM_URL，当前只能显示 Gemini 识别结果。"
+    : "当前页只有 Gemini 结果；请切换到智能识别并确认 BDRC 服务可用后重新识别。";
 
   return normalizeOcrCompare({
-    note: "当前页是旧版 Gemini Vision 单栏结果；BDRC 初稿不可用，已在左栏显示原因。",
+    note: "当前页是旧版 Gemini 单栏结果；BDRC 初稿不可用，已在左栏显示原因。",
     bdrc: {
       label: "BDRC",
       text: "",
@@ -7829,7 +7924,7 @@ function makeAiOnlyCompareWithBdrcDiagnostic(result) {
       error: true,
     },
     llm: {
-      label: "Gemini Vision / LLM",
+      label: "Gemini / LLM",
       text: aiText,
       lines: aiLines.length ? aiLines : makeOcrLinesFromText(aiText),
       model: getOcrResponseModel(result.raw),
@@ -7851,8 +7946,8 @@ function makeOcrCompareFromRawResult(result) {
   const llmLines = extractOcrLines(aiRaw);
   return normalizeOcrCompare({
     note: result.raw.ai_error
-      ? `Gemini Vision 调用未返回可用文本：${result.raw.ai_error}`
-      : "左栏为 BDRC OCR 初稿，右栏为 Gemini Vision / LLM 识别或复核结果。",
+      ? `Gemini 调用未返回可用文本：${result.raw.ai_error}`
+      : "左栏为 BDRC OCR 初稿，右栏为 Gemini / LLM 识别或复核结果。",
     bdrc: {
       label: "BDRC",
       text: bdrcText,
@@ -7914,12 +8009,12 @@ function getAiVisionDiagnosticText(compare, index) {
     .find(Boolean);
   const explicitText = String(side?.text || explicitLine || "").trim();
   if (side?.error) {
-    return explicitText || "Gemini Vision 调用失败；请检查 AI OCR 服务后重新识别当前页。";
+    return explicitText || "Gemini 调用失败；请检查 AI OCR 服务后重新识别当前页。";
   }
   if (hasOcrSideContent(side)) {
-    return `Gemini Vision 未返回第 ${index + 1} 行的识别结果；模型可能只返回了前几行，请重新识别当前页。`;
+    return `Gemini 未返回第 ${index + 1} 行的识别结果；模型可能只返回了前几行，请重新识别当前页。`;
   }
-  return "Gemini Vision 未返回文本；请重新识别当前页，或检查 18092 AI OCR 服务。";
+  return "Gemini 未返回文本；请重新识别当前页，或检查 18092 AI OCR 服务。";
 }
 
 function renderOcrSourceComparison(compare) {
@@ -7928,7 +8023,7 @@ function renderOcrSourceComparison(compare) {
 
   const note = document.createElement("div");
   note.className = "ocr-source-compare-note";
-  note.textContent = compare.note || "左栏为 BDRC OCR 初稿，右栏为 Gemini Vision / LLM 识别或复核结果。";
+  note.textContent = compare.note || "左栏为 BDRC OCR 初稿，右栏为 Gemini / LLM 识别或复核结果。";
   wrapper.appendChild(note);
 
   const bdrcLines = getEffectiveOcrSideLines(compare.bdrc);
@@ -7949,7 +8044,7 @@ function renderOcrSourceComparison(compare) {
   );
   columns.appendChild(
     renderOcrSourceColumn({
-      title: "Gemini Vision / LLM",
+      title: "Gemini / LLM",
       subtitle: "智能识别或复核",
       lines: llmLines,
       peerLines: bdrcLines,
@@ -8031,15 +8126,15 @@ function renderOcrSourceColumn({ title, subtitle, lines, peerLines, rowCount, si
 }
 
 function makeEmptyOcrCompare(result) {
-  let note = "选择“智能（BDRC + LLM）”后点击“识别”，BDRC 与 Gemini Vision 会分别显示在两个独立栏。";
+  let note = "选择“智能（BDRC + LLM）”后点击“识别”，BDRC 与 Gemini 会分别显示在两个独立栏。";
   let bdrcText = "";
   let llmText = "";
   if (result?.source === "bdrc") {
     bdrcText = result.text || "";
-    note = "当前只有 BDRC 结果；请用“智能（BDRC + LLM）”重新识别，生成右栏 Gemini Vision / LLM。";
+    note = "当前只有 BDRC 结果；请用“智能（BDRC + LLM）”重新识别，生成右栏 Gemini / LLM。";
   } else if (result?.source === "ai-vision") {
     llmText = result.text || "";
-    note = "当前只有 Gemini Vision 结果；请用“智能（BDRC + LLM）”重新识别，生成左栏 BDRC。";
+    note = "当前只有 Gemini 结果；请用“智能（BDRC + LLM）”重新识别，生成左栏 BDRC。";
   } else if (result?.text) {
     bdrcText = result.text;
     note = "当前是旧缓存或直接文本结果；请用“智能（BDRC + LLM）”重新识别当前页。";
@@ -8048,7 +8143,7 @@ function makeEmptyOcrCompare(result) {
     note,
     bdrc: normalizeOcrCompareSide({ label: "BDRC", text: bdrcText, lines: bdrcText ? (result?.lines?.length ? result.lines : extractOcrLines(result?.raw).length ? extractOcrLines(result.raw) : makeOcrLinesFromText(bdrcText)) : [] }),
     llm: normalizeOcrCompareSide({
-      label: "Gemini Vision / LLM",
+      label: "Gemini / LLM",
       text: llmText,
       lines: llmText ? (result?.lines?.length ? result.lines : makeOcrLinesFromText(llmText)) : [],
       model: getOcrResponseModel(result?.raw),
@@ -8147,9 +8242,9 @@ function renderOcrLineMarkup(container, text, options = {}) {
     ].filter(Boolean).join(" ");
     mark.title = [
       highRisk ? "高危：包含藏文上下加字或组合符，优先人工校对" : "",
-      different ? "差异：BDRC 与 Gemini Vision 此处不一致" : "",
+      different ? "差异：BDRC 与 Gemini 此处不一致" : "",
       manuallyEdited ? "手动修改过的字" : "",
-      sharedError ? (options.sharedErrorTitle || "错误：BDRC 与 Gemini Vision 都疑似识别错误，需人工改正") : "",
+      sharedError ? (options.sharedErrorTitle || "错误：BDRC 与 Gemini 都疑似识别错误，需人工改正") : "",
     ].filter(Boolean).join("；");
     mark.textContent = segment;
     container.appendChild(mark);
@@ -8777,7 +8872,7 @@ function buildOcrPageMarkdown(pageNum, result) {
   );
   const models = [
     { name: "BDRC", side: "bdrc", lines: bdrcLines, model: compare?.bdrc?.model || "" },
-    { name: "Gemini Vision", side: "llm", lines: geminiLines, model: compare?.llm?.model || "" },
+    { name: "Gemini", side: "llm", lines: geminiLines, model: compare?.llm?.model || "" },
     { name: "千问", reviews: reviewSets[0] },
     { name: "OpenAI", reviews: reviewSets[1] },
   ];
@@ -8914,7 +9009,7 @@ function buildOcrModelQualityMarkdown(reviews) {
   return [
     "## 模型质检统计",
     "",
-    "仅统计人工标错或修改后自动保存的 BDRC 与 Gemini Vision 行；估算准确率 = 1 - 标错字符数 / 已审核字符数。样本量较小时仅供参考。",
+    "仅统计人工标错或修改后自动保存的 BDRC 与 Gemini 行；估算准确率 = 1 - 标错字符数 / 已审核字符数。样本量较小时仅供参考。",
     "",
     "| 模型 | 服务 | 已审核行 | 已审核字符 | 标错字符 | 估算准确率 |",
     "| --- | --- | ---: | ---: | ---: | ---: |",
@@ -8938,12 +9033,12 @@ function downloadAllAiOcrText() {
     .sort((a, b) => a[0] - b[0]);
 
   if (!pages.length) {
-    setStatus("还没有可导出的 Gemini Vision OCR 文本。", "warn");
+    setStatus("还没有可导出的 Gemini OCR 文本。", "warn");
     return;
   }
 
   const body = [
-    `# ${state.sourceName || "Gemini Vision OCR"} 识别结果`,
+    `# ${state.sourceName || "Gemini OCR"} 识别结果`,
     "",
     ...pages.flatMap(([pageNum, text]) => [
       `## 第 ${pageNum} 页`,
@@ -8955,7 +9050,7 @@ function downloadAllAiOcrText() {
   const blob = new Blob([body], { type: "text/markdown;charset=utf-8" });
   const safeName = (state.sourceName || "ai-vision-ocr").replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "_");
   downloadBlob(blob, `${safeName}_ai_ocr.md`);
-  setStatus("已导出全部 Gemini Vision OCR 文本。", "ok");
+  setStatus("已导出全部 Gemini OCR 文本。", "ok");
 }
 
 function downloadAllTranslationText() {
@@ -9055,13 +9150,13 @@ function updateOcrPanelForPage() {
   } else if (state.sourceType === "markdown" || state.sourceType === "text") {
     els.ocrTitle.textContent = state.sourceType === "text" ? "文本文件" : "Markdown 文本";
   } else {
-    const engineLabel = result?.source === "bdrc" ? `BDRC · ${profile.label}` : "Gemini Vision";
+    const engineLabel = result?.source === "bdrc" ? `BDRC · ${profile.label}` : "Gemini";
     els.ocrTitle.textContent = state.sourceType === "image"
       ? `图片 ${engineLabel}`
       : `第 ${state.pageNum} 页 ${engineLabel}`;
   }
   if (els.ocrPaneEyebrow) {
-    els.ocrPaneEyebrow.textContent = result?.source === "bdrc" ? "BDRC OCR 结果" : "Gemini Vision OCR 结果";
+    els.ocrPaneEyebrow.textContent = result?.source === "bdrc" ? "BDRC OCR 结果" : "Gemini OCR 结果";
   }
   els.ocrText.value = result?.text || "";
   els.ocrMeta.textContent = hasAiError
@@ -9090,15 +9185,15 @@ function updateAiOcrPanelMeta(compare = null) {
   const hasAiError = Boolean(sourceCompare.llm.error || aiLines.some((line) => line.error));
   const returnedLineCount = sourceCompare.llm.returnedLineCount || countNonEmptyOcrLines(aiLines);
   const expectedLineCount = sourceCompare.llm.expectedLineCount || countNonEmptyOcrLines(bdrcLines);
-  const model = sourceCompare.llm.model || "Gemini Vision";
+  const model = sourceCompare.llm.model || "Gemini";
   const lineMeta = expectedLineCount
     ? `${returnedLineCount}/${expectedLineCount} 行`
     : `${returnedLineCount} 行`;
 
-  els.aiOcrTitle.textContent = state.pageCount ? `第 ${state.pageNum} 页 Gemini Vision` : "等待智能识别";
+  els.aiOcrTitle.textContent = state.pageCount ? `第 ${state.pageNum} 页 Gemini` : "等待智能识别";
   els.aiOcrMeta.textContent = aiPending ? "识别中" : hasAiText ? `${model} · ${lineMeta}` : hasAiError ? "调用失败" : "未返回";
   els.aiOcrMeta.title = hasAiText
-    ? `Gemini Vision 模型：${model}${sourceCompare.llm.provider ? `；服务：${sourceCompare.llm.provider}` : ""}；返回行数：${lineMeta}`
+    ? `Gemini 模型：${model}${sourceCompare.llm.provider ? `；服务：${sourceCompare.llm.provider}` : ""}；返回行数：${lineMeta}`
     : "";
   els.aiOcrMeta.style.color = aiPending
     ? "var(--amber)"
@@ -9248,7 +9343,7 @@ function setBusy(isBusy) {
   els.ocrButton.disabled = isBusy || !state.pageCount;
   if (els.geminiPageReviewButton) els.geminiPageReviewButton.disabled = isBusy || !state.pageCount || pageReviewPending;
   if (els.geminiModelSelect) els.geminiModelSelect.disabled = isBusy || pageReviewPending;
-  syncGeminiRowModelSelectors();
+  refreshGeminiRowModelSelectors();
   setOptionalDisabled("checkOcrButton", isBusy);
   els.ocrButton.querySelector("span").textContent = isBusy ? "识别中" : "识别";
   if (wasBusy && !isBusy && state.ocrResults.get(state.pageNum)?.raw?.line_ocr) updateOcrPanelForPage();
@@ -9276,9 +9371,9 @@ function formatNetworkError(error, url, service = "ocr") {
       return `无法连接 ${url}。请先启动本地藏译汉服务：python3 tibetan-translation-services/nllb_translate_server.py；或把接口地址改成可用的翻译 API。`;
     }
     if (resolvedService === "ai-ocr") {
-      return `无法连接 ${url}。请先启动本地 Gemini Vision OCR 服务：python3 tibetan-ocr-core/ai_vision_ocr_server.py；或运行 ./tibetan-proofreading-app/start_services.sh`;
+      return `无法连接 ${url}。请先启动本地 Gemini OCR 服务：python3 tibetan-ocr-core/ai_vision_ocr_server.py；或运行 ./tibetan-proofreading-app/start_services.sh`;
     }
-    return `无法连接 ${url}。请先启动 Gemini Vision OCR 服务：python3 tibetan-ocr-core/ai_vision_ocr_server.py`;
+    return `无法连接 ${url}。请先启动 Gemini OCR 服务：python3 tibetan-ocr-core/ai_vision_ocr_server.py`;
   }
   return summarizeServiceError(error?.message || String(error));
 }
@@ -9289,7 +9384,7 @@ function summarizeServiceError(message) {
   if (text.includes("RESOURCE_EXHAUSTED") || text.includes("Quota exceeded") || text.includes("HTTP 429")) {
     const retryMatch = text.match(/retry in ([0-9.]+)s/i);
     const retry = retryMatch ? `，建议 ${Math.ceil(Number(retryMatch[1]))} 秒后重试` : "";
-    return `上游模型额度或频率限制耗尽（HTTP 429 / RESOURCE_EXHAUSTED）${retry}。请更换可用的 Gemini Vision 模型/API key，或稍后重试。`;
+    return `上游模型额度或频率限制耗尽（HTTP 429 / RESOURCE_EXHAUSTED）${retry}。请更换可用的 Gemini 模型/API key，或稍后重试。`;
   }
   return text.length > 420 ? `${text.slice(0, 420)}...` : text;
 }
