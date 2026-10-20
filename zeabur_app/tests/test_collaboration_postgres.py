@@ -5,8 +5,9 @@ import unittest
 
 
 class _Cursor:
-    def __init__(self, statements):
+    def __init__(self, statements, schema_exists):
         self.statements = statements
+        self.schema_exists = schema_exists
 
     def __enter__(self):
         return self
@@ -17,13 +18,17 @@ class _Cursor:
     def execute(self, sql, params=None):
         self.statements.append((sql, params))
 
+    def fetchone(self):
+        return {"schema_exists": self.schema_exists}
+
 
 class _Connection:
-    def __init__(self, statements):
+    def __init__(self, statements, schema_exists):
         self.statements = statements
+        self.schema_exists = schema_exists
 
     def cursor(self):
-        return _Cursor(self.statements)
+        return _Cursor(self.statements, self.schema_exists)
 
     def commit(self):
         pass
@@ -39,11 +44,12 @@ class CollaborationPostgresTests(unittest.TestCase):
     def setUp(self):
         self.statements = []
         self.calls = []
+        self.schema_exists = True
         fake_psycopg = types.ModuleType("psycopg")
 
         def connect(**kwargs):
             self.calls.append(kwargs)
-            return _Connection(self.statements)
+            return _Connection(self.statements, self.schema_exists)
 
         fake_psycopg.connect = connect
         fake_rows = types.ModuleType("psycopg.rows")
@@ -82,14 +88,21 @@ class CollaborationPostgresTests(unittest.TestCase):
         self.assertEqual(self.calls[0]["options"], "-c search_path=tibetan_collab,public")
         self.assertEqual(self.calls[0]["connect_timeout"], 3)
 
-    def test_initialize_creates_schema_qualified_postgres_tables(self):
+    def test_initialize_uses_existing_schema_without_database_create_privilege(self):
         self.collaboration._initialize_schema()
         sql = "\n".join(statement for statement, _params in self.statements)
-        self.assertIn("CREATE SCHEMA IF NOT EXISTS tibetan_collab", sql)
+        self.assertIn("pg_namespace", sql)
+        self.assertNotIn("CREATE SCHEMA", sql)
         self.assertIn("tibetan_collab.collab_book_state", sql)
         self.assertIn("BIGSERIAL PRIMARY KEY", sql)
         self.assertNotIn("AUTO_INCREMENT", sql)
         self.assertNotIn("CHARACTER SET", sql)
+
+    def test_initialize_creates_missing_schema(self):
+        self.schema_exists = False
+        self.collaboration._initialize_schema()
+        sql = "\n".join(statement for statement, _params in self.statements)
+        self.assertIn("CREATE SCHEMA IF NOT EXISTS tibetan_collab", sql)
 
 
 if __name__ == "__main__":

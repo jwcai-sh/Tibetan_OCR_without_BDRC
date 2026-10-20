@@ -94,7 +94,9 @@ def _initialize_schema() -> None:
     try:
         with db.cursor() as cur:
             schema = _schema()
-            cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            cur.execute("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %s) AS schema_exists", (schema,))
+            if not cur.fetchone()["schema_exists"]:
+                cur.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
             cur.execute(f"""CREATE TABLE IF NOT EXISTS {_table('collab_book_state')} (
                 book_id VARCHAR(128) PRIMARY KEY,
                 state_json TEXT NOT NULL,
