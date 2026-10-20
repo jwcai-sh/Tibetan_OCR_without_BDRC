@@ -223,6 +223,7 @@ const cloudLibrary = {
   path: "",
   loaded: false,
   loading: false,
+  pendingResume: null,
 };
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -234,14 +235,14 @@ window.addEventListener("DOMContentLoaded", () => {
   restoreWorkspaceLayout();
   configureDeploymentEndpoints();
   wireEvents();
-  initializeCloudLibrary();
+  const cloudLibraryReady = initializeCloudLibrary();
   renderTranslationRoleOptions();
   renderActiveTranslationRoleMeta();
   configurePdfJs();
   refreshControls();
   updateSummary();
   updateTranslationSummary();
-  void restoreRouteFromLocation();
+  void cloudLibraryReady.then(() => restoreRouteFromLocation());
   window.addEventListener("popstate", restoreRouteFromLocation);
   warnIfFileProtocol();
   if (window.lucide) {
@@ -1186,6 +1187,10 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   const requestId = options.requestId ?? ++state.documentRequestId;
   if (requestId !== state.documentRequestId) return;
   showWorkbenchView(workflow);
+  if (cloudLibrary.authMode === "collaboration" && !cloudLibrary.actor) {
+    requestCollaborationLogin(project, workflow);
+    return;
+  }
   setStatus(`正在恢复云端项目“${project.sourceName}”...`, "warn");
   try {
     const baseUrl = window.location.origin;
@@ -1194,9 +1199,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       let sourceName = project.sourceName || "";
       let sourceMime = project.sourceMime || "";
       let sourceSize = Number(project.sourceSize) || 0;
-      if (!sourceName || !sourceMime) {
-        const probe = await fetch(sourceUrl, { headers: { Range: "bytes=0-0" } });
-        if (!probe.ok) throw new Error(`源文件 HTTP ${probe.status}`);
+      {
+        const probe = await fetch(sourceUrl, { credentials: "same-origin", headers: { Range: "bytes=0-0" } });
+        if (!probe.ok) throw Object.assign(new Error(`源文件 HTTP ${probe.status}`), { status: probe.status });
         const disposition = probe.headers.get("content-disposition") || "";
         const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
         if (!sourceName && encodedName) {
@@ -1212,7 +1217,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         return { rangePdf: true, name: sourceName, type: sourceMime, size: sourceSize };
       }
       const response = await fetch(sourceUrl);
-      if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
+      if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       return { file: new File([blob], sourceName, {
         type: blob.type || sourceMime || "application/octet-stream",
@@ -1222,7 +1227,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(12000) : undefined,
     }).then(async (response) => {
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || `状态 HTTP ${response.status}`);
+      if (!response.ok) throw Object.assign(new Error(payload.detail || `状态 HTTP ${response.status}`), { status: response.status });
       return payload;
     }).then((remoteState) => ({ remoteState }), (error) => ({ error }));
     const source = await sourcePromise;
@@ -1251,6 +1256,10 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     if (stateResult.error) {
       const error = stateResult.error;
       state.remoteRestoreInFlight = false;
+      if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
+        requestCollaborationLogin(project, workflow);
+        return;
+      }
       setStatus(`已打开“${sourceName}”原文；云端校对状态暂时无法加载（${error.message || error}）。本地已有结果仍保留，修改暂时无法确认是否已同步。`, "warn");
       updateCollaborationPageNumber();
       return;
@@ -1260,7 +1269,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     let sourceReloadRequired = false;
     if (sourceFile && remoteState.size && sourceFile.size !== Number(remoteState.size)) {
       const response = await fetch(sourceUrl);
-      if (!response.ok) throw new Error(`源文件 HTTP ${response.status}`);
+      if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       sourceFile = new File([blob], sourceName, { type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf" });
       sourceReloadRequired = true;
@@ -1306,9 +1315,27 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
     state.remoteRestoreInFlight = false;
+    if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
+      requestCollaborationLogin(project, workflow);
+      return;
+    }
     if (!state.pageCount) els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
+}
+
+function requestCollaborationLogin(project, workflow) {
+  cloudLibrary.pendingResume = { project, workflow };
+  cloudLibrary.actor = "";
+  cloudLibrary.loaded = false;
+  els.collaborationActorLabel.textContent = "";
+  els.collabHeaderName.hidden = false;
+  els.collabHeaderPassword.hidden = !cloudLibrary.passwordRequired;
+  els.collabHeaderLogin.hidden = false;
+  els.collabHeaderLogout.hidden = true;
+  els.cloudLibraryAuth.hidden = false;
+  els.cloudLibraryFiles.hidden = true;
+  setStatus("协作登录已失效，请在右上角重新登录；登录后会继续打开当前书籍。", "warn");
 }
 
 async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requestId) {
@@ -1404,7 +1431,10 @@ async function unlockCloudLibrary() {
       els.collabHeaderPassword.value = "";
       els.cloudLibraryAuth.hidden = true;
       document.getElementById("collaborationPanel").hidden = false;
-      void restoreRouteFromLocation();
+      const pendingResume = cloudLibrary.pendingResume;
+      cloudLibrary.pendingResume = null;
+      if (pendingResume) void resumeRemoteProject(pendingResume.project, pendingResume.workflow);
+      else void restoreRouteFromLocation();
     } catch (error) { setCloudLibraryStatus(`登录失败：${error.message || error}`, true); return; }
   } else cloudLibrary.token = token;
   els.cloudLibraryPassword.value = "";
