@@ -7,10 +7,10 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>藏文典籍翻译工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20261019-qwen-row-v1" />
+    <link rel="stylesheet" href="./styles.css?v=20261020-gemini-row-models-v1" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261019-qwen-row-v2" defer></script>
+    <script src="./app.js?v=20261020-gemini-row-models-v1" defer></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -303,20 +303,10 @@
               <button id="ocrNextPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏下一页" title="下一页"><i data-lucide="chevron-right"></i></button>
               <button id="ocrLastPageButton" class="icon-button compact page-jump-button" type="button" aria-label="右栏最后一页" title="最后一页"><i data-lucide="skip-forward"></i></button>
             </div>
-            <div class="gemini-model-actions" role="group" aria-label="Gemini 识别和整页复核">
-              <button id="ocrButton" class="primary-button compact" type="button">
-                <i data-lucide="scan-text"></i>
-                <span>识别</span>
-              </button>
-              <button id="geminiPageReviewButton" class="ghost-button compact" type="button" title="读取完整原页并复核本页中间栏；裁剪预览供人工对照。">
-                <i data-lucide="scan-search"></i>
-                <span>整页复核</span>
-              </button>
-              <label class="ocr-profile-control gemini-model-control" for="geminiModelSelect">
-                <span>Gemini</span>
-                <select id="geminiModelSelect" aria-label="Gemini OCR 与整页复核模型"></select>
-              </label>
-            </div>
+            <button id="ocrButton" class="primary-button compact" type="button">
+              <i data-lucide="scan-text"></i>
+              <span>识别</span>
+            </button>
             <label class="ocr-profile-control ocr-engine-control" for="ocrModeSelect">
               <span>引擎</span>
               <select id="ocrModeSelect" aria-label="OCR 识别引擎">

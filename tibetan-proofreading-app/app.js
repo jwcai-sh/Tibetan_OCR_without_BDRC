@@ -3,6 +3,8 @@ const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
 const APP_BUILD_ID = "20261013-collaboration-rds-v1";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
+let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
+let geminiRowModelTitle = "";
 const reviewCatalogRequests = new Map();
 const pendingGeminiRowModels = new Map();
 const SOURCE_LAYOUT_VERSION = 4;
@@ -301,8 +303,6 @@ function cacheElements() {
     "zoomInput",
     "checkTranslateButton",
     "ocrButton",
-    "geminiPageReviewButton",
-    "geminiModelSelect",
     "statusBar",
     "thumbnailList",
     "sourceTitle",
@@ -514,8 +514,7 @@ function wireEvents() {
   });
   bindOptionalClick("checkTranslateButton", checkTranslateService);
   els.ocrButton.addEventListener("click", runOcrForCurrentPage);
-  els.geminiPageReviewButton.addEventListener("click", reviewGeminiCurrentPage);
-  initializeGeminiModelSelector();
+  loadGeminiRowModelCatalog();
   els.batchOcrButton.addEventListener("click", runOcrForRemainingPages);
   els.cancelBatchOcrButton.addEventListener("click", () => {
     if (state.batchOcr?.running) {
@@ -6070,7 +6069,7 @@ function renderReviewModelSelector(provider, index, onCatalog = null) {
 }
 
 function getSelectedGeminiModel() {
-  return els.geminiModelSelect?.value || REVIEW_MODEL_DEFAULTS.gemini[0];
+  return REVIEW_MODEL_DEFAULTS.gemini[0];
 }
 
 function updateGeminiRowRecognizeButton(select) {
@@ -6081,13 +6080,13 @@ function updateGeminiRowRecognizeButton(select) {
 }
 
 function refreshGeminiRowModelSelectors() {
-  const options = Array.from(els.geminiModelSelect?.options || []);
   els.ocrLineCompare?.querySelectorAll(".gemini-row-model-select").forEach((select) => {
     const chosen = select.value;
-    select.replaceChildren(...options.map((item) => new Option(item.textContent, item.value)));
-    select.value = options.some((item) => item.value === chosen) ? chosen : getSelectedGeminiModel();
-    select.disabled = state.isOcrBusy || pageReviewPending || !options.length;
-    select.title = els.geminiModelSelect.title;
+    select.replaceChildren(...geminiRowModels.map((model) => new Option(model, model)));
+    select.value = geminiRowModels.includes(chosen) ? chosen :
+      (geminiRowModels.includes(getSelectedGeminiModel()) ? getSelectedGeminiModel() : geminiRowModels[0] || "");
+    select.disabled = state.isOcrBusy || pageReviewPending || !geminiRowModels.length;
+    select.title = geminiRowModelTitle;
     updateGeminiRowRecognizeButton(select);
   });
 }
@@ -6096,14 +6095,15 @@ function renderGeminiRowModelSelector(index, recognizedModel) {
   const select = document.createElement("select");
   select.className = "review-model-select gemini-row-model-select";
   select.setAttribute("aria-label", `第 ${index + 1} 行 Gemini 重新识别模型`);
-  select.replaceChildren(...Array.from(els.geminiModelSelect.options, (item) => new Option(item.textContent, item.value)));
+  select.replaceChildren(...geminiRowModels.map((model) => new Option(model, model)));
   const key = JSON.stringify([state.cacheKey, state.pageNum, index]);
   const initialModel = recognizedModel || getSelectedGeminiModel();
   const requestedModel = pendingGeminiRowModels.get(key) || initialModel;
-  select.value = Array.from(select.options).some((item) => item.value === requestedModel) ? requestedModel : getSelectedGeminiModel();
+  select.value = geminiRowModels.includes(requestedModel) ? requestedModel :
+    (geminiRowModels.includes(getSelectedGeminiModel()) ? getSelectedGeminiModel() : geminiRowModels[0] || "");
   select.dataset.recognizedModel = initialModel;
   select.disabled = state.isOcrBusy || pageReviewPending;
-  select.title = els.geminiModelSelect.title;
+  select.title = geminiRowModelTitle;
   select.addEventListener("change", () => {
     if (select.value === initialModel) pendingGeminiRowModels.delete(key);
     else pendingGeminiRowModels.set(key, select.value);
@@ -6112,72 +6112,22 @@ function renderGeminiRowModelSelector(index, recognizedModel) {
   return select;
 }
 
-function initializeGeminiModelSelector() {
-  const select = els.geminiModelSelect;
-  if (!select) return;
-  let preferred = "";
-  try { preferred = window.localStorage.getItem("tibetan-proofreading-app:gemini-model") || ""; } catch (_) { /* storage optional */ }
-  const fill = (models) => {
-    const available = Array.isArray(models) ? models.filter((model) => typeof model === "string" && model.startsWith("gemini-")) : [];
-    const choices = available.length ? available : REVIEW_MODEL_DEFAULTS.gemini;
-    const chosen = preferred || select.value;
-    select.replaceChildren(...choices.map((model) => {
-      const option = document.createElement("option");
-      option.value = model;
-      option.textContent = model;
-      return option;
-    }));
-    select.value = choices.includes(chosen) ? chosen : choices[0];
-    select.disabled = !choices.length;
-    refreshGeminiRowModelSelectors();
-  };
-  fill(REVIEW_MODEL_DEFAULTS.gemini);
-  select.addEventListener("change", () => {
-    preferred = select.value;
-    try { window.localStorage.setItem("tibetan-proofreading-app:gemini-model", select.value); } catch (_) { /* storage optional */ }
-  });
+function loadGeminiRowModelCatalog() {
   const endpoint = getAiVisionLineReviewEndpoint().replace(/\/line-review$/, "/review-models");
   fetch(endpoint).then(async (response) => {
     if (!response.ok) throw new Error(`模型列表 HTTP ${response.status}`);
     return response.json();
   }).then((catalog) => {
-    if (!select.isConnected) return;
-    if (Array.isArray(catalog.gemini?.models)) fill(catalog.gemini.models);
-    select.title = catalog.gemini?.billing_note || "所选模型同时用于 Gemini 识别和整页复核。";
+    const available = Array.isArray(catalog.gemini?.models)
+      ? catalog.gemini.models.filter((model) => typeof model === "string" && model.startsWith("gemini-"))
+      : [];
+    if (available.length) geminiRowModels = available;
+    geminiRowModelTitle = catalog.gemini?.billing_note || "所选模型用于本行 Gemini 重新识别。";
     refreshGeminiRowModelSelectors();
   }).catch((error) => {
-    select.title = `模型列表加载失败：${error.message}；当前显示默认模型。`;
+    geminiRowModelTitle = `模型列表加载失败：${error.message}；当前显示默认模型。`;
     refreshGeminiRowModelSelectors();
   });
-}
-
-async function reviewGeminiCurrentPage() {
-  const button = els.geminiPageReviewButton;
-  if (pageReviewPending || state.isOcrBusy) return;
-  if (!state.pageCount) {
-    setStatus("请先加载一页图像，再进行 Gemini 整页复核。", "warn");
-    return;
-  }
-  const endpoint = els.aiOcrEndpointInput.value.trim();
-  if (!endpoint) {
-    setStatus("Gemini 服务地址未配置。", "warn");
-    return;
-  }
-  pageReviewPending = true;
-  button.disabled = true;
-  els.geminiModelSelect.disabled = true;
-  refreshGeminiRowModelSelectors();
-  try {
-    const blob = await getCurrentPageImageBlob();
-    await runTraditionalGeminiLines(endpoint, blob, getSelectedGeminiModel());
-  } catch (error) {
-    setStatus(`Gemini 整页复核失败：${error.message || error}`, "error");
-  } finally {
-    pageReviewPending = false;
-    button.disabled = false;
-    els.geminiModelSelect.disabled = false;
-    refreshGeminiRowModelSelectors();
-  }
 }
 
 async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
@@ -9346,7 +9296,6 @@ function refreshControls() {
   setOptionalDisabled("ocrNextPageButton", !hasDocument || state.pageNum >= state.pageCount || Boolean(state.batchOcr?.running));
   setOptionalDisabled("ocrLastPageButton", !hasDocument || state.pageNum >= state.pageCount || Boolean(state.batchOcr?.running));
   els.ocrButton.disabled = !hasDocument || state.isOcrBusy;
-  els.geminiPageReviewButton.disabled = !hasDocument || state.isOcrBusy || pageReviewPending;
   setOptionalDisabled("downloadPageButton", !hasDocument);
   els.copyButton.disabled = !hasDocument;
   setOptionalDisabled("clearButton", !hasDocument);
@@ -9395,8 +9344,6 @@ function setBusy(isBusy) {
   if (els.ocrModeSelect) els.ocrModeSelect.disabled = Boolean(isBusy);
   if (els.ocrProfileSelect) els.ocrProfileSelect.disabled = Boolean(isBusy);
   els.ocrButton.disabled = isBusy || !state.pageCount;
-  if (els.geminiPageReviewButton) els.geminiPageReviewButton.disabled = isBusy || !state.pageCount || pageReviewPending;
-  if (els.geminiModelSelect) els.geminiModelSelect.disabled = isBusy || pageReviewPending;
   refreshGeminiRowModelSelectors();
   setOptionalDisabled("checkOcrButton", isBusy);
   els.ocrButton.querySelector("span").textContent = isBusy ? "识别中" : "识别";
