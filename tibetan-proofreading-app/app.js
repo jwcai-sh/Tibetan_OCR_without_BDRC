@@ -1224,7 +1224,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       }) };
     })();
     const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
-      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(12000) : undefined,
+      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
     }).then(async (response) => {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw Object.assign(new Error(payload.detail || `状态 HTTP ${response.status}`), { status: response.status });
@@ -2965,6 +2965,9 @@ function scheduleRemoteStateSave(payload, immediate = false) {
       }
       state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
       for (const page of changedPages) state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
+      if (/云端校对状态暂时无法加载|云端校对状态同步失败/.test(els.statusBar.textContent || "")) {
+        setStatus("云端校对状态已同步。", "ok");
+      }
     } catch (error) {
       console.warn("Failed to save remote OCR state", error);
       setStatus(`本地已保存，但云端校对状态同步失败：${error.message || error}`, "warn");

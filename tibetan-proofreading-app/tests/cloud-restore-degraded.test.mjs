@@ -10,6 +10,11 @@ assert.ok(restore.indexOf("await loadFile(sourceFile") < restore.indexOf("await 
   "load the source document before waiting for collaborative state");
 assert.match(restore, /协作数据库暂时不可用|云端校对状态暂时无法加载/,
   "show a clear degraded-state message without discarding the loaded source");
+assert.match(restore, /AbortSignal\.timeout\(45000\)/,
+  "allow enough time for the cross-region collaboration database to return cloud state");
+const remoteSave = app.slice(app.indexOf("function scheduleRemoteStateSave("), app.indexOf("function remotePageFingerprint("));
+assert.match(remoteSave, /response\.ok[\s\S]*?state\.remotePageRevisions\s*=[\s\S]*?setStatus\("云端校对状态已同步。", "ok"\)/,
+  "clear an old synchronization warning after a confirmed remote save");
 assert.match(restore, /loadRemotePdfWithRanges/, "uncached cloud PDFs should use PDF.js range loading");
 assert.match(app, /disableStream:\s*Boolean\(options\.useRangeRequests\)/);
 assert.match(app, /disableAutoFetch:\s*Boolean\(options\.useRangeRequests\)/);
