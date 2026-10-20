@@ -1291,7 +1291,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       state.sourceMime = remoteState.content_type || sourceMime;
     }
     const cacheKey = sourceFile ? makeCacheKey(sourceFile) : state.cacheKey;
-    window.localStorage.setItem(cacheKey, JSON.stringify({
+    const cloudCache = {
         sourceName,
         sourceSize: sourceFile?.size || state.sourceSize,
         sourceMime: sourceFile?.type || state.sourceMime,
@@ -1302,15 +1302,25 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         ocrResults: remoteState.ocr_results || remoteState.ocrResults || {},
         translationResults: remoteState.translation_results || remoteState.translationResults || {},
         ocrQualityReviews: remoteState.ocrQualityReviews || [],
-    }));
+    };
+    const { payload: restoredCache, localPending } = mergeNewerLocalCloudState(
+      cloudCache, window.localStorage.getItem(cacheKey), project.remoteBookId,
+    );
+    window.localStorage.setItem(cacheKey, JSON.stringify(restoredCache));
     restoreCachedResults();
     await renderCurrentPage();
     state.remotePageRevisions = remoteState.page_revisions || {};
     state.remotePageSnapshots = makeRemotePageSnapshots(remoteState);
     state.remoteRestoreInFlight = false;
-    setStatus(remoteState.collaboration_degraded
-      ? `已打开“${sourceName}”及云端最近保存的校对进度。${remoteState.collaboration_message || "协作数据库暂不可用，修改暂时无法同步。"}`
-      : `已恢复“${sourceName}”及云端校对进度。`, remoteState.collaboration_degraded ? "warn" : "ok");
+    if (localPending && !remoteState.collaboration_degraded) {
+      setStatus("已保留本机较新的校对结果，正在同步云端...", "warn");
+      const saved = await saveCachedResults({ immediateRemote: true });
+      if (saved === false) setStatus("本机校对结果未能保存，请先保留当前页面。", "error");
+    } else {
+      setStatus(remoteState.collaboration_degraded
+        ? `已打开“${sourceName}”及云端最近保存的校对进度。${remoteState.collaboration_message || "协作数据库暂不可用，修改暂时无法同步。"}`
+        : `已恢复“${sourceName}”及云端校对进度。`, remoteState.collaboration_degraded ? "warn" : "ok");
+    }
     updateCollaborationPageNumber();
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
@@ -1321,6 +1331,37 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     }
     if (!state.pageCount) els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
+  }
+}
+
+function mergeNewerLocalCloudState(cloudCache, localRaw, bookId) {
+  try {
+    const local = JSON.parse(localRaw || "null");
+    const localTime = Date.parse(local?.updatedAt || "");
+    const cloudTime = Date.parse(cloudCache.updatedAt || "");
+    if (local?.remoteBookId !== bookId || Number(local.pageCount) !== Number(cloudCache.pageCount)
+        || !Number.isFinite(localTime) || localTime <= (Number.isFinite(cloudTime) ? cloudTime : 0)) {
+      return { payload: cloudCache, localPending: false };
+    }
+    const localOcr = local.ocrResults && typeof local.ocrResults === "object" ? local.ocrResults : {};
+    const localTranslation = local.translationResults && typeof local.translationResults === "object" ? local.translationResults : {};
+    if (!Object.keys(localOcr).length && !Object.keys(localTranslation).length && !local.ocrQualityReviews?.length) {
+      return { payload: cloudCache, localPending: false };
+    }
+    return {
+      payload: {
+        ...cloudCache,
+        updatedAt: local.updatedAt,
+        ocrProfile: OCR_PROFILES[local.ocrProfile] ? local.ocrProfile : cloudCache.ocrProfile,
+        ocrResults: { ...cloudCache.ocrResults, ...localOcr },
+        translationResults: { ...cloudCache.translationResults, ...localTranslation },
+        ocrQualityReviews: Array.isArray(local.ocrQualityReviews) ? local.ocrQualityReviews : cloudCache.ocrQualityReviews,
+      },
+      localPending: true,
+    };
+  } catch (error) {
+    console.warn("Failed to compare local and cloud proofreading state", error);
+    return { payload: cloudCache, localPending: false };
   }
 }
 
@@ -2965,7 +3006,7 @@ function scheduleRemoteStateSave(payload, immediate = false) {
       }
       state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
       for (const page of changedPages) state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
-      if (/云端校对状态暂时无法加载|云端校对状态同步失败/.test(els.statusBar.textContent || "")) {
+      if (/云端校对状态暂时无法加载|云端校对状态同步失败|正在同步云端/.test(els.statusBar.textContent || "")) {
         setStatus("云端校对状态已同步。", "ok");
       }
     } catch (error) {

@@ -15,6 +15,21 @@ assert.match(restore, /AbortSignal\.timeout\(45000\)/,
 const remoteSave = app.slice(app.indexOf("function scheduleRemoteStateSave("), app.indexOf("function remotePageFingerprint("));
 assert.match(remoteSave, /response\.ok[\s\S]*?state\.remotePageRevisions\s*=[\s\S]*?setStatus\("云端校对状态已同步。", "ok"\)/,
   "clear an old synchronization warning after a confirmed remote save");
+assert.match(restore, /mergeNewerLocalCloudState\(/,
+  "compare saved local proofreading results before replacing the cloud cache");
+assert.match(restore, /localPending[\s\S]*?saveCachedResults\(\{ immediateRemote: true \}\)/,
+  "sync newer local proofreading results only after cloud page revisions are restored");
+const mergeSource = app.slice(app.indexOf("function mergeNewerLocalCloudState("), app.indexOf("function requestCollaborationLogin("));
+const merge = new Function("OCR_PROFILES", "console", `${mergeSource}\nreturn mergeNewerLocalCloudState;`)({ traditional: {} }, console);
+const cloud = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:00:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "cloud" } }, translationResults: {}, ocrQualityReviews: [] };
+const local = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:01:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "local edit" }, 2: { text: "local page" } }, translationResults: {}, ocrQualityReviews: [] };
+assert.equal(merge(cloud, JSON.stringify(local), "book-1").localPending, true);
+assert.deepEqual(merge(cloud, JSON.stringify(local), "book-1").payload.ocrResults, local.ocrResults,
+  "a newer local correction and an unsynced page survive cloud restoration");
+assert.equal(merge(cloud, JSON.stringify({ ...local, updatedAt: "2026-10-20T10:59:00Z" }), "book-1").localPending, false,
+  "older local state does not replace newer cloud work");
+assert.equal(merge(cloud, JSON.stringify({ ...local, remoteBookId: "another-book" }), "book-1").localPending, false,
+  "another book's local state is never merged");
 assert.match(restore, /loadRemotePdfWithRanges/, "uncached cloud PDFs should use PDF.js range loading");
 assert.match(app, /disableStream:\s*Boolean\(options\.useRangeRequests\)/);
 assert.match(app, /disableAutoFetch:\s*Boolean\(options\.useRangeRequests\)/);
