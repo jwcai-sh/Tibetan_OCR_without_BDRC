@@ -208,6 +208,7 @@ const state = {
   remoteBookId: "",
   remotePageRevisions: {},
   remotePageSnapshots: {},
+  remoteDeferredPages: new Set(),
   remoteSaveTimer: null,
   layoutHydrationInFlight: new Map(),
   activeProjectRestoreInFlight: false,
@@ -1303,19 +1304,27 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         translationResults: remoteState.translation_results || remoteState.translationResults || {},
         ocrQualityReviews: remoteState.ocrQualityReviews || [],
     };
-    const { payload: restoredCache, localPending } = mergeNewerLocalCloudState(
-      cloudCache, window.localStorage.getItem(cacheKey), project.remoteBookId,
+    const previousLocalCache = window.localStorage.getItem(cacheKey);
+    const { payload: restoredCache, pendingPages } = mergeNewerLocalCloudState(
+      cloudCache, previousLocalCache, project.remoteBookId,
     );
+    if (pendingPages.length && previousLocalCache && !window.localStorage.getItem(`${cacheKey}:before-cloud-restore`)) {
+      try { window.localStorage.setItem(`${cacheKey}:before-cloud-restore`, previousLocalCache); }
+      catch (error) { console.warn("Could not preserve pre-restore local cache", error); }
+    }
     window.localStorage.setItem(cacheKey, JSON.stringify(restoredCache));
     restoreCachedResults();
     await renderCurrentPage();
     state.remotePageRevisions = remoteState.page_revisions || {};
-    state.remotePageSnapshots = makeRemotePageSnapshots(remoteState);
+    state.remotePageSnapshots = makeRemotePageSnapshots({
+      ocrResults: serializeResultMap(state.ocrResults),
+      translationResults: serializeResultMap(state.translationResults),
+      ocrQualityReviews: state.ocrQualityReviews,
+    });
+    state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
-    if (localPending && !remoteState.collaboration_degraded) {
-      setStatus("已保留本机较新的校对结果，正在同步云端...", "warn");
-      const saved = await saveCachedResults({ immediateRemote: true });
-      if (saved === false) setStatus("本机校对结果未能保存，请先保留当前页面。", "error");
+    if (pendingPages.length && !remoteState.collaboration_degraded) {
+      setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
     } else {
       setStatus(remoteState.collaboration_degraded
         ? `已打开“${sourceName}”及云端最近保存的校对进度。${remoteState.collaboration_message || "协作数据库暂不可用，修改暂时无法同步。"}`
@@ -1337,31 +1346,63 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
 function mergeNewerLocalCloudState(cloudCache, localRaw, bookId) {
   try {
     const local = JSON.parse(localRaw || "null");
-    const localTime = Date.parse(local?.updatedAt || "");
-    const cloudTime = Date.parse(cloudCache.updatedAt || "");
-    if (local?.remoteBookId !== bookId || Number(local.pageCount) !== Number(cloudCache.pageCount)
-        || !Number.isFinite(localTime) || localTime <= (Number.isFinite(cloudTime) ? cloudTime : 0)) {
-      return { payload: cloudCache, localPending: false };
+    if (local?.remoteBookId !== bookId || Number(local.pageCount) !== Number(cloudCache.pageCount)) {
+      return { payload: cloudCache, localPending: false, pendingPages: [] };
     }
     const localOcr = local.ocrResults && typeof local.ocrResults === "object" ? local.ocrResults : {};
     const localTranslation = local.translationResults && typeof local.translationResults === "object" ? local.translationResults : {};
-    if (!Object.keys(localOcr).length && !Object.keys(localTranslation).length && !local.ocrQualityReviews?.length) {
-      return { payload: cloudCache, localPending: false };
+    const localReviews = Array.isArray(local.ocrQualityReviews) ? local.ocrQualityReviews : [];
+    const cloudReviews = Array.isArray(cloudCache.ocrQualityReviews) ? cloudCache.ocrQualityReviews : [];
+    const pages = new Set([...Object.keys(localOcr), ...Object.keys(localTranslation)]);
+    localReviews.forEach((row) => { if (row.pageNum != null || row.page_num != null) pages.add(String(row.pageNum ?? row.page_num)); });
+    const ocrResults = { ...cloudCache.ocrResults };
+    const translationResults = { ...cloudCache.translationResults };
+    let ocrQualityReviews = [...cloudReviews];
+    const pendingPages = [];
+    const timestamp = (value) => Date.parse(value || "") || 0;
+    for (const page of pages) {
+      const localPageReviews = localReviews.filter((row) => String(row.pageNum ?? row.page_num) === page);
+      const cloudPageReviews = cloudReviews.filter((row) => String(row.pageNum ?? row.page_num) === page);
+      const localTime = Math.max(timestamp(localOcr[page]?.updatedAt), timestamp(localTranslation[page]?.updatedAt),
+        ...localPageReviews.map((row) => timestamp(row.reviewedAt)));
+      const cloudTime = Math.max(timestamp(cloudCache.ocrResults?.[page]?.updatedAt),
+        timestamp(cloudCache.translationResults?.[page]?.updatedAt),
+        ...cloudPageReviews.map((row) => timestamp(row.reviewedAt)));
+      const cloudHasPage = cloudCache.ocrResults?.[page] != null || cloudCache.translationResults?.[page] != null || cloudPageReviews.length > 0;
+      if (cloudHasPage && (!localTime || localTime <= cloudTime)) continue;
+      const visibleContent = (ocr, translation, reviews) => JSON.stringify({
+        ocrText: ocr?.text || "",
+        lines: (ocr?.lines || []).map((line) => ({ text: line.text || "", deleted: Boolean(line.deleted) })),
+        translationText: translation?.text || "",
+        reviews,
+      });
+      if (cloudHasPage && visibleContent(localOcr[page], localTranslation[page], localPageReviews) ===
+          visibleContent(cloudCache.ocrResults?.[page], cloudCache.translationResults?.[page], cloudPageReviews)) continue;
+      if (localOcr[page] != null && (!cloudHasPage || timestamp(localOcr[page].updatedAt) > timestamp(cloudCache.ocrResults?.[page]?.updatedAt))) ocrResults[page] = localOcr[page];
+      if (localTranslation[page] != null && (!cloudHasPage || timestamp(localTranslation[page].updatedAt) > timestamp(cloudCache.translationResults?.[page]?.updatedAt))) translationResults[page] = localTranslation[page];
+      if (localPageReviews.length && (!cloudHasPage || Math.max(...localPageReviews.map((row) => timestamp(row.reviewedAt))) >
+          Math.max(0, ...cloudPageReviews.map((row) => timestamp(row.reviewedAt))))) {
+        ocrQualityReviews = ocrQualityReviews.filter((row) => String(row.pageNum ?? row.page_num) !== page).concat(localPageReviews);
+      }
+      const merged = { ocrResults, translationResults, ocrQualityReviews };
+      if (remotePageFingerprint(merged, page) !== remotePageFingerprint(cloudCache, page)) pendingPages.push(page);
     }
+    pendingPages.sort((a, b) => Number(a) - Number(b));
     return {
       payload: {
         ...cloudCache,
-        updatedAt: local.updatedAt,
+        updatedAt: pendingPages.length ? local.updatedAt : cloudCache.updatedAt,
         ocrProfile: OCR_PROFILES[local.ocrProfile] ? local.ocrProfile : cloudCache.ocrProfile,
-        ocrResults: { ...cloudCache.ocrResults, ...localOcr },
-        translationResults: { ...cloudCache.translationResults, ...localTranslation },
-        ocrQualityReviews: Array.isArray(local.ocrQualityReviews) ? local.ocrQualityReviews : cloudCache.ocrQualityReviews,
+        ocrResults,
+        translationResults,
+        ocrQualityReviews,
       },
-      localPending: true,
+      localPending: pendingPages.length > 0,
+      pendingPages,
     };
   } catch (error) {
     console.warn("Failed to compare local and cloud proofreading state", error);
-    return { payload: cloudCache, localPending: false };
+    return { payload: cloudCache, localPending: false, pendingPages: [] };
   }
 }
 
@@ -2797,6 +2838,9 @@ function resetDocumentState() {
   state.translationResults.clear();
   state.ocrQualityReviews = [];
   state.remoteBookId = "";
+  state.remotePageRevisions = {};
+  state.remotePageSnapshots = {};
+  state.remoteDeferredPages = new Set();
   if (state.remoteSaveTimer) {
     window.clearTimeout(state.remoteSaveTimer);
     state.remoteSaveTimer = null;
@@ -2971,6 +3015,7 @@ async function createRemoteBook(file, requestId = state.documentRequestId) {
   state.remoteBookId = payload.book_id;
   state.remotePageRevisions = {};
   state.remotePageSnapshots = {};
+  state.remoteDeferredPages = new Set();
   const url = new URL(window.location.href);
   url.searchParams.set("book_id", state.remoteBookId);
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -3005,9 +3050,14 @@ function scheduleRemoteStateSave(payload, immediate = false) {
         throw new Error(detail || `HTTP ${response.status}`);
       }
       state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
-      for (const page of changedPages) state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
-      if (/云端校对状态暂时无法加载|云端校对状态同步失败|正在同步云端/.test(els.statusBar.textContent || "")) {
-        setStatus("云端校对状态已同步。", "ok");
+      for (const page of changedPages) {
+        state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
+        state.remoteDeferredPages.delete(page);
+      }
+      if (/云端校对状态暂时无法加载|云端校对状态同步失败|正在同步云端|已保留本机第|待复核同步/.test(els.statusBar.textContent || "")) {
+        setStatus(state.remoteDeferredPages.size
+          ? `当前修改已同步；本机第 ${[...state.remoteDeferredPages].join("、")} 页仍待复核同步。`
+          : "云端校对状态已同步。", state.remoteDeferredPages.size ? "warn" : "ok");
       }
     } catch (error) {
       console.warn("Failed to save remote OCR state", error);
