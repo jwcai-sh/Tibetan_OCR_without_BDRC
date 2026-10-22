@@ -21,6 +21,7 @@ from fastapi import HTTPException, Request, Response
 
 _schema_ready = False
 _schema_lock = threading.Lock()
+COLLAB_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 def _env(name: str) -> str:
@@ -130,11 +131,11 @@ def issue_session(name: str, password: str, response: Response, request: Request
     shared_password = _env("COLLABORATION_PASSWORD")
     if not valid_name or (shared_password and not hmac.compare_digest(password, shared_password)):
         raise HTTPException(401, "姓名或协作口令不正确")
-    expires = int(time.time()) + 12 * 60 * 60
+    expires = int(time.time()) + COLLAB_SESSION_TTL_SECONDS
     body = base64.urlsafe_b64encode(json.dumps({"name": valid_name, "exp": expires}, separators=(",", ":")).encode()).decode().rstrip("=")
     sig = hmac.new(_env("COLLAB_SESSION_SECRET").encode(), body.encode(), hashlib.sha256).hexdigest()
     token = f"{body}.{sig}"
-    response.set_cookie("tibetan_collab", token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=12 * 60 * 60, path="/")
+    response.set_cookie("tibetan_collab", token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=COLLAB_SESSION_TTL_SECONDS, path="/")
     return token
 
 
