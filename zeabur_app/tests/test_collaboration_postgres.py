@@ -2,6 +2,10 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import Response
 
 
 class _Cursor:
@@ -103,6 +107,36 @@ class CollaborationPostgresTests(unittest.TestCase):
         self.collaboration._initialize_schema()
         sql = "\n".join(statement for statement, _params in self.statements)
         self.assertIn("CREATE SCHEMA IF NOT EXISTS tibetan_collab", sql)
+
+    def test_signed_access_token_can_authenticate_local_workbench_api_calls(self):
+        os.environ["COLLABORATOR_NAMES"] = "alpha,beta"
+        response = Response()
+        request = Request({"type": "http", "scheme": "https", "headers": [], "server": ("zeabur.app", 443), "client": ("127.0.0.1", 1), "method": "POST", "path": "/api/collaboration/login", "query_string": b""})
+        token = self.collaboration.issue_session("alpha", "shared", response, request)
+        authenticated = Request({"type": "http", "scheme": "https", "headers": [(b"authorization", f"Bearer {token}".encode())], "server": ("zeabur.app", 443), "client": ("127.0.0.1", 1), "method": "GET", "path": "/api/library", "query_string": b""})
+        self.assertEqual(self.collaboration.current_actor(authenticated), "alpha")
+
+    def test_local_workbench_origin_gets_token_and_cors_access(self):
+        from zeabur_app import main
+
+        client = TestClient(main.app)
+        with patch.object(main.collaboration, "configured", return_value=True), \
+             patch.object(main.collaboration, "issue_session", return_value="signed-session"):
+            login = client.post("/api/collaboration/login", headers={"Origin": "http://127.0.0.1:8790"}, json={"name": "alpha"})
+            denied_origin = client.options("/api/library/upload", headers={
+                "Origin": "https://untrusted.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization",
+            })
+            local_preflight = client.options("/api/library/upload", headers={
+                "Origin": "http://127.0.0.1:8790",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization",
+            })
+        self.assertEqual(login.json()["access_token"], "signed-session")
+        self.assertEqual(denied_origin.status_code, 400)
+        self.assertEqual(local_preflight.status_code, 200)
+        self.assertEqual(local_preflight.headers["access-control-allow-origin"], "http://127.0.0.1:8790")
 
 
 if __name__ == "__main__":

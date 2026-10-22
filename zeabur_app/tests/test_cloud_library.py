@@ -40,7 +40,10 @@ class FakeBucket:
         return FakeObject(body)
 
     def put_object(self, key, body, headers=None):
-        self.objects[key] = body
+        self.objects[key] = body.read() if hasattr(body, "read") else body
+
+    def get_bucket_versioning(self):
+        return SimpleNamespace(status="Disabled")
 
     def head_object(self, key):
         if key not in self.objects:
@@ -97,6 +100,35 @@ class CloudLibraryTest(unittest.TestCase):
         for path in ("../secret.pdf", "/outside.pdf", "nested/../../secret.pdf", "../books/secret.pdf"):
             self.assertEqual(self.client.post("/api/library/open", headers=headers, json={"path": path}).status_code, 400)
         self.assertEqual(self.client.post("/api/library/open", headers=headers, json={"path": "missing.pdf"}).status_code, 404)
+
+    def test_upload_accepts_text_formats_and_rejects_overwrite(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        response = self.client.post(
+            "/api/library/upload", headers=headers,
+            data={"path": "经书/"}, files={"file": ("校对稿.md", "藏文文本".encode(), "text/markdown")},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["path"], "经书/校对稿.md")
+        self.assertEqual(self.bucket.objects["待识别文档/经书/校对稿.md"], "藏文文本".encode())
+        duplicate = self.client.post(
+            "/api/library/upload", headers=headers,
+            data={"path": "经书"}, files={"file": ("校对稿.md", b"replacement", "text/markdown")},
+        )
+        self.assertEqual(duplicate.status_code, 409)
+
+    def test_upload_rejects_unsupported_names_and_versioned_buckets(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        invalid = self.client.post(
+            "/api/library/upload", headers=headers,
+            files={"file": ("archive.zip", b"zip", "application/zip")},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        with patch.object(self.bucket, "get_bucket_versioning", return_value=SimpleNamespace(status="Enabled")):
+            versioned = self.client.post(
+                "/api/library/upload", headers=headers,
+                files={"file": ("new.txt", b"text", "text/plain")},
+            )
+        self.assertEqual(versioned.status_code, 503)
 
 
 if __name__ == "__main__":

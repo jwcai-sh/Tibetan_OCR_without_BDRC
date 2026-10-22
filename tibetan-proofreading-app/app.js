@@ -12,6 +12,7 @@ window.__TIBETAN_PROOFREADING_APP_BUILD_ID__ = APP_BUILD_ID;
 const CACHE_PREFIX = "tibetan-proofreading-app:v1:";
 const ACTIVE_PROJECT_KEY = "tibetan-proofreading-app:active-project";
 const CLOUD_LIBRARY_SESSION_KEY = "tibetan-proofreading-app:cloud-library-token";
+const LOCAL_CLOUD_LIBRARY_SESSION_KEY = "tibetan-proofreading-app:zeabur-library-session";
 const SOURCE_DB_NAME = "tibetan-proofreading-app-sources";
 const SOURCE_STORE_NAME = "files";
 const FOLDER_PROJECTS_KEY = "tibetan-proofreading-app:folder-projects:v1";
@@ -217,6 +218,8 @@ const state = {
 
 const cloudLibrary = {
   token: "",
+  accessToken: "",
+  apiBaseUrl: "",
   authMode: "legacy",
   actor: "",
   names: [],
@@ -224,6 +227,7 @@ const cloudLibrary = {
   path: "",
   loaded: false,
   loading: false,
+  uploading: false,
   pendingResume: null,
 };
 
@@ -267,8 +271,10 @@ function cacheElements() {
     "homeProjectList",
     "cloudLibrary",
     "cloudLibraryCount",
+    "cloudLibraryUploadButton", "cloudLibraryUploadInput",
     "cloudLibraryRefreshButton",
     "cloudLibraryAuth",
+    "cloudLibraryAuthTitle", "cloudLibraryAuthHint",
     "cloudLibraryPassword",
     "collaboratorName",
     "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout",
@@ -390,6 +396,14 @@ function isCloudDeployment() {
   return window.location.protocol === "https:" || !["127.0.0.1", "localhost", ""].includes(window.location.hostname);
 }
 
+function isLocalWorkbench() {
+  return !isCloudDeployment() && ["127.0.0.1", "localhost"].includes(window.location.hostname);
+}
+
+function cloudLibraryApiOrigin() {
+  return isCloudDeployment() ? window.location.origin : "https://tibetan-ocr-without-bdrc.zeabur.app";
+}
+
 function configureDeploymentEndpoints() {
   els.aiOcrEndpointInput.value = `${window.location.origin}/api/ai-ocr`;
   els.translateEndpointInput.value = `${window.location.origin}/api/translate`;
@@ -406,7 +420,13 @@ function wireEvents() {
   bindOptionalClick("homeContinueTranslationTaskButton", () => continueHomeTask("translation"));
   bindOptionalClick("homeRefreshProjectsButton", () => renderHomeDashboard());
   bindOptionalClick("cloudLibraryRefreshButton", () => void refreshCloudLibrary());
+  bindOptionalClick("cloudLibraryUploadButton", () => els.cloudLibraryUploadInput?.click());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
+  els.cloudLibraryUploadInput?.addEventListener("change", (event) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (file) void uploadCloudLibraryFile(file);
+  });
   bindOptionalClick("collabShowHistory", () => void showPageHistory());
   bindOptionalClick("collabLogout", () => void logoutCollaboration());
   bindOptionalClick("collabHeaderLogin", () => void unlockCloudLibrary());
@@ -1194,14 +1214,15 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   }
   setStatus(`正在恢复云端项目“${project.sourceName}”...`, "warn");
   try {
-    const baseUrl = window.location.origin;
+    const baseUrl = project.apiBaseUrl || window.location.origin;
+    const apiHeaders = project.apiAccessToken ? { Authorization: `Bearer ${project.apiAccessToken}` } : {};
     const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source?v=${Date.now()}`;
     const sourcePromise = (async () => {
       let sourceName = project.sourceName || "";
       let sourceMime = project.sourceMime || "";
       let sourceSize = Number(project.sourceSize) || 0;
       {
-        const probe = await fetch(sourceUrl, { credentials: "same-origin", headers: { Range: "bytes=0-0" } });
+        const probe = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: { Range: "bytes=0-0", ...apiHeaders } });
         if (!probe.ok) throw Object.assign(new Error(`源文件 HTTP ${probe.status}`), { status: probe.status });
         const disposition = probe.headers.get("content-disposition") || "";
         const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
@@ -1217,7 +1238,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       if (isPdfFile(pdfDescriptor)) {
         return { rangePdf: true, name: sourceName, type: sourceMime, size: sourceSize };
       }
-      const response = await fetch(sourceUrl);
+      const response = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders });
       if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       return { file: new File([blob], sourceName, {
@@ -1225,6 +1246,8 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       }) };
     })();
     const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
+      credentials: project.apiAccessToken ? "omit" : "same-origin",
+      headers: apiHeaders,
       signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
     }).then(async (response) => {
       const payload = await response.json().catch(() => ({}));
@@ -1242,7 +1265,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         name: sourceName,
         size: source.size || 0,
         type: sourceMime,
-      }, project.remoteBookId, requestId);
+      }, project.remoteBookId, requestId, apiHeaders);
       if (!loaded) return;
     } else {
       if (sourceFile.name !== sourceName) {
@@ -1269,7 +1292,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     sourceName = remoteState.sourceName || remoteState.name || sourceName;
     let sourceReloadRequired = false;
     if (sourceFile && remoteState.size && sourceFile.size !== Number(remoteState.size)) {
-      const response = await fetch(sourceUrl);
+      const response = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders });
       if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       sourceFile = new File([blob], sourceName, { type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf" });
@@ -1420,7 +1443,7 @@ function requestCollaborationLogin(project, workflow) {
   setStatus("协作登录已失效，请在右上角重新登录；登录后会继续打开当前书籍。", "warn");
 }
 
-async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requestId) {
+async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requestId, httpHeaders = {}) {
   if (requestId !== state.documentRequestId) return false;
   const existingProject = getHomeProjects().find((project) => project.remoteBookId === remoteBookId);
   resetDocumentState();
@@ -1433,7 +1456,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
   els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
-  return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId });
+  return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId, httpHeaders });
 }
 
 async function findCachedRemoteSource(project) {
@@ -1452,10 +1475,10 @@ async function findCachedRemoteSource(project) {
 
 async function initializeCloudLibrary() {
   if (!els.cloudLibrary) return;
-  els.cloudLibrary.hidden = !isCloudDeployment();
-  if (!isCloudDeployment()) return;
+  els.cloudLibrary.hidden = false;
+  cloudLibrary.apiBaseUrl = cloudLibraryApiOrigin();
   try {
-    const response = await fetch(`${window.location.origin}/api/collaboration/config`);
+    const response = await fetch(`${cloudLibrary.apiBaseUrl}/api/collaboration/config`);
     const config = await response.json();
     cloudLibrary.authMode = config.enabled ? "collaboration" : "legacy";
     cloudLibrary.names = Array.isArray(config.names) ? config.names : [];
@@ -1470,8 +1493,19 @@ async function initializeCloudLibrary() {
       document.getElementById("cloudLibraryAuthHint").textContent = cloudLibrary.passwordRequired
         ? "选择姓名并输入共用口令；协作修改记录保存在阿里云数据库。"
         : "测试阶段选择姓名即可登录；协作修改记录保存在阿里云数据库。";
-      const meResponse = await fetch(`${window.location.origin}/api/collaboration/me`, { credentials: "same-origin" });
+      if (isLocalWorkbench()) {
+        try { cloudLibrary.accessToken = window.sessionStorage.getItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.accessToken = ""; }
+      }
+      const meHeaders = cloudLibrary.accessToken ? { Authorization: `Bearer ${cloudLibrary.accessToken}` } : {};
+      const meResponse = await fetch(`${cloudLibrary.apiBaseUrl}/api/collaboration/me`, {
+        credentials: isCloudDeployment() ? "same-origin" : "omit",
+        headers: meHeaders,
+      });
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
+      else if (isLocalWorkbench() && cloudLibrary.accessToken) {
+        cloudLibrary.accessToken = "";
+        try { window.sessionStorage.removeItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
+      }
     } else {
       try { cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.token = ""; }
     }
@@ -1481,15 +1515,20 @@ async function initializeCloudLibrary() {
   els.cloudLibraryAuth.hidden = cloudLibrary.authMode === "collaboration" ? Boolean(cloudLibrary.actor) : Boolean(cloudLibrary.token);
   els.cloudLibraryFiles.hidden = true;
   const panel = document.getElementById("collaborationPanel");
-  if (panel) panel.hidden = cloudLibrary.authMode !== "collaboration";
-  els.collaborationLoginBar.hidden = cloudLibrary.authMode !== "collaboration";
+  if (panel) panel.hidden = !isCloudDeployment() || cloudLibrary.authMode !== "collaboration";
+  if (els.collaborationLoginBar) els.collaborationLoginBar.hidden = !isCloudDeployment() || cloudLibrary.authMode !== "collaboration";
   els.collaborationActorLabel.textContent = cloudLibrary.actor ? `协作者：${cloudLibrary.actor}` : "";
   els.collabHeaderName.hidden = Boolean(cloudLibrary.actor);
   els.collabHeaderPassword.hidden = Boolean(cloudLibrary.actor) || !cloudLibrary.passwordRequired;
   els.collabHeaderPassword.disabled = !cloudLibrary.passwordRequired;
   els.collabHeaderLogin.hidden = Boolean(cloudLibrary.actor);
   els.collabHeaderLogout.hidden = !cloudLibrary.actor;
-  if (cloudLibrary.authMode === "collaboration") els.cloudLibraryAuth.hidden = true;
+  if (cloudLibrary.authMode === "collaboration") els.cloudLibraryAuth.hidden = Boolean(cloudLibrary.actor);
+  if (isLocalWorkbench()) {
+    if (els.cloudLibraryAuthTitle) els.cloudLibraryAuthTitle.textContent = "连接云端 OSS 目录";
+    if (els.cloudLibraryAuthHint) els.cloudLibraryAuthHint.textContent = "使用 Zeabur 协作者账号登录后，可从本地工作台浏览和打开云端文件。";
+  }
+  if (els.cloudLibraryUploadButton) els.cloudLibraryUploadButton.hidden = !cloudLibrary.actor && !cloudLibrary.token;
   if (cloudLibrary.actor) void refreshCloudLibrary();
 }
 
@@ -1501,18 +1540,28 @@ async function unlockCloudLibrary() {
   }
   if (cloudLibrary.authMode === "collaboration") {
     try {
-      const response = await fetch(`${window.location.origin}/api/collaboration/login`, {
-        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: els.collabHeaderName?.value || document.getElementById("collaboratorName")?.value || "", password: token }),
+      const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/collaboration/login`, {
+        method: "POST", credentials: isCloudDeployment() ? "same-origin" : "omit", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: isLocalWorkbench()
+            ? document.getElementById("collaboratorName")?.value || ""
+            : els.collabHeaderName?.value || document.getElementById("collaboratorName")?.value || "",
+          password: token,
+        }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
       cloudLibrary.actor = payload.name;
+      if (isLocalWorkbench()) {
+        if (!payload.access_token) throw new Error("云端未返回本地会话凭证，请刷新本地页面后重试");
+        cloudLibrary.accessToken = payload.access_token;
+        try { window.sessionStorage.setItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY, cloudLibrary.accessToken); } catch (_) { /* Session token remains available for this page. */ }
+      }
       els.collaborationActorLabel.textContent = `协作者：${cloudLibrary.actor}`;
       els.collabHeaderName.hidden = true; els.collabHeaderPassword.hidden = true; els.collabHeaderLogin.hidden = true; els.collabHeaderLogout.hidden = false;
       els.collabHeaderPassword.value = "";
       els.cloudLibraryAuth.hidden = true;
-      document.getElementById("collaborationPanel").hidden = false;
+      document.getElementById("collaborationPanel").hidden = !isCloudDeployment();
       const pendingResume = cloudLibrary.pendingResume;
       cloudLibrary.pendingResume = null;
       if (pendingResume) void resumeRemoteProject(pendingResume.project, pendingResume.workflow);
@@ -1531,7 +1580,7 @@ function setCloudLibraryStatus(message, isError = false) {
 }
 
 async function refreshCloudLibrary() {
-  if (!isCloudDeployment() || cloudLibrary.loading) return;
+  if (cloudLibrary.loading) return;
   if (!cloudLibrary.token && !(cloudLibrary.authMode === "collaboration" && cloudLibrary.actor)) {
     els.cloudLibraryAuth.hidden = false;
     els.cloudLibraryFiles.hidden = true;
@@ -1541,7 +1590,10 @@ async function refreshCloudLibrary() {
   setCloudLibraryStatus("正在读取云端目录…");
   try {
     const headers = cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {};
-    const response = await fetch(`${window.location.origin}/api/library`, { credentials: "same-origin", headers });
+    if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
+    const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library`, {
+      credentials: isCloudDeployment() ? "same-origin" : "omit", headers,
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(payload.detail || `HTTP ${response.status}`), { status: response.status });
     cloudLibrary.items = Array.isArray(payload.items) ? payload.items.filter((item) => typeof item.path === "string") : [];
@@ -1550,6 +1602,7 @@ async function refreshCloudLibrary() {
     els.cloudLibraryPassword.value = "";
     els.cloudLibraryAuth.hidden = true;
     els.cloudLibraryFiles.hidden = false;
+    if (els.cloudLibraryUploadButton) els.cloudLibraryUploadButton.hidden = false;
     els.cloudLibraryCount.textContent = `${cloudLibrary.items.length} 项`;
     setCloudLibraryStatus(payload.truncated ? "目录超过 1000 项，仅显示前 1000 项。" : "");
     renderCloudLibraryRows();
@@ -1557,10 +1610,13 @@ async function refreshCloudLibrary() {
     if (error.status === 401) {
       cloudLibrary.token = "";
       cloudLibrary.actor = "";
+      cloudLibrary.accessToken = "";
       cloudLibrary.loaded = false;
       try { window.sessionStorage.removeItem(CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
+      try { window.sessionStorage.removeItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
       els.cloudLibraryAuth.hidden = false;
       els.cloudLibraryFiles.hidden = true;
+      if (els.cloudLibraryUploadButton) els.cloudLibraryUploadButton.hidden = true;
       if (cloudLibrary.authMode === "collaboration") {
         els.collaborationActorLabel.textContent = "";
         els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = !cloudLibrary.passwordRequired; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
@@ -1569,6 +1625,46 @@ async function refreshCloudLibrary() {
     setCloudLibraryStatus(`云端目录读取失败：${error.message || error}`, true);
   } finally {
     cloudLibrary.loading = false;
+  }
+}
+
+async function uploadCloudLibraryFile(file) {
+  if (cloudLibrary.uploading || (!cloudLibrary.actor && !cloudLibrary.token)) return;
+  cloudLibrary.uploading = true;
+  els.cloudLibraryUploadButton.disabled = true;
+  els.cloudLibraryUploadInput.disabled = true;
+  const formData = new FormData();
+  formData.append("path", cloudLibrary.path);
+  formData.append("file", file);
+  setCloudLibraryStatus(`正在上传“${file.name}”… 0%`);
+  try {
+    const payload = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library/upload`);
+      if (isCloudDeployment()) xhr.withCredentials = true;
+      const bearer = isLocalWorkbench() ? cloudLibrary.accessToken : cloudLibrary.authMode === "legacy" ? cloudLibrary.token : "";
+      if (bearer) xhr.setRequestHeader("Authorization", `Bearer ${bearer}`);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) setCloudLibraryStatus(`正在上传“${file.name}”… ${Math.min(99, Math.round(event.loaded / event.total * 100))}%`);
+      };
+      xhr.onload = () => {
+        let response = {};
+        try { response = JSON.parse(xhr.responseText || "{}"); } catch (_) { /* Report the status below. */ }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(response);
+        else reject(new Error(response.detail || `HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error("网络连接失败"));
+      xhr.onabort = () => reject(new Error("上传已取消"));
+      xhr.send(formData);
+    });
+    const refreshed = await refreshCloudLibrary();
+    setCloudLibraryStatus(refreshed ? `已上传“${payload.path || file.name}”。` : "文件已上传，但目录刷新失败；请点击“刷新”查看。", !refreshed);
+  } catch (error) {
+    setCloudLibraryStatus(`上传失败：${error.message || error}`, true);
+  } finally {
+    cloudLibrary.uploading = false;
+    els.cloudLibraryUploadButton.disabled = false;
+    els.cloudLibraryUploadInput.disabled = false;
   }
 }
 
@@ -1596,7 +1692,12 @@ async function showPageHistory() {
 }
 
 async function logoutCollaboration() {
-  await fetch(`${window.location.origin}/api/collaboration/logout`, { method: "POST", credentials: "same-origin" }).catch(() => {});
+  if (isLocalWorkbench()) {
+    try { window.sessionStorage.removeItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
+    cloudLibrary.accessToken = "";
+  } else {
+    await fetch(`${window.location.origin}/api/collaboration/logout`, { method: "POST", credentials: "same-origin" }).catch(() => {});
+  }
   cloudLibrary.actor = "";
   cloudLibrary.loaded = false;
   els.cloudLibraryAuth.hidden = false;
@@ -1653,7 +1754,7 @@ function renderCloudLibraryRows() {
     const date = updatedAt && !Number.isNaN(updatedAt.getTime())
       ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(updatedAt) : "—";
     rows.appendChild(makeCloudLibraryRow(name, "file-text", date,
-      name.toLowerCase().endsWith(".pdf") ? "PDF 文稿" : "图像", () => void openCloudLibraryFile(file),
+      cloudLibraryFileKind(name), () => void openCloudLibraryFile(file),
       formatCloudLibrarySize(file.size)));
   }
   if (!folders.size && !files.length) {
@@ -1663,6 +1764,16 @@ function renderCloudLibraryRows() {
     rows.appendChild(empty);
   }
   if (window.lucide) window.lucide.createIcons();
+}
+
+function cloudLibraryFileKind(name) {
+  const extension = name.split(".").pop().toLowerCase();
+  if (extension === "pdf") return "PDF 文稿";
+  if (["png", "jpg", "jpeg", "tif", "tiff"].includes(extension)) return "图像";
+  if (extension === "docx") return "Word 文档";
+  if (["md", "markdown"].includes(extension)) return "Markdown 文档";
+  if (extension === "txt") return "纯文本";
+  return "文件";
 }
 
 function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—") {
@@ -1696,17 +1807,24 @@ async function openCloudLibraryFile(file) {
   const requestId = ++state.documentRequestId;
   setCloudLibraryStatus(`正在打开“${file.path}”…`);
   try {
-    const response = await fetch(`${window.location.origin}/api/library/open`, {
+    const headers = { "Content-Type": "application/json", ...(cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {}) };
+    if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
+    const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library/open`, {
       method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", ...(cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {}) },
+      credentials: isCloudDeployment() ? "same-origin" : "omit",
+      headers,
       body: JSON.stringify({ path: file.path }),
     });
     const book = await response.json().catch(() => ({}));
     if (requestId !== state.documentRequestId) return;
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
     setCloudLibraryStatus("");
-    await resumeRemoteProject({ sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type, remoteBookId: book.book_id }, "ocr", { requestId });
+    await resumeRemoteProject({
+      sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type,
+      remoteBookId: book.book_id,
+      apiBaseUrl: cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin(),
+      apiAccessToken: isLocalWorkbench() ? cloudLibrary.accessToken : "",
+    }, "ocr", { requestId });
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
     setCloudLibraryStatus(`打开文档失败：${error.message || error}`, true);
@@ -2653,6 +2771,7 @@ async function loadPdf(file, options = {}) {
   state.pdfUrl = options.sourceUrl || URL.createObjectURL(file);
   const task = window.pdfjsLib.getDocument({
     url: state.pdfUrl,
+    ...(options.httpHeaders ? { httpHeaders: options.httpHeaders } : {}),
     disableStream: Boolean(options.useRangeRequests),
     disableAutoFetch: Boolean(options.useRangeRequests),
     ...(options.useRangeRequests ? { rangeChunkSize: 64 * 1024 } : {}),

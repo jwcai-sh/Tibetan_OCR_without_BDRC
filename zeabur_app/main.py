@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +43,11 @@ LIBRARY_PREFIX = "待识别文档/"
 LIBRARY_PASSWORD = env("LIBRARY_PASSWORD") or env("PASSWORD")
 LIBRARY_LIMIT = 1000
 MAX_UPLOAD_BYTES = int(env("MAX_UPLOAD_BYTES", str(200 * 1024 * 1024)))
+LOCAL_WORKBENCH_ORIGINS = {"http://127.0.0.1:8790", "http://localhost:8790"}
+LIBRARY_FILE_EXTENSIONS = {
+    ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff",
+    ".docx", ".md", ".markdown", ".txt",
+}
 
 
 def oss_bucket() -> oss2.Bucket:
@@ -89,17 +95,40 @@ def library_object_key(relative_path: str) -> str:
     if (not path or path.startswith("/") or "\\" in path or "\x00" in path
             or any(part in ("", ".", "..") for part in path.split("/"))):
         raise HTTPException(400, "无效的文档路径")
-    if PurePosixPath(path).suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}:
-        raise HTTPException(400, "仅支持打开 PDF 或图片")
+    if PurePosixPath(path).suffix.lower() not in LIBRARY_FILE_EXTENSIONS:
+        raise HTTPException(400, "不支持打开此文件类型")
     return f"{LIBRARY_PREFIX}{path}"
+
+
+def library_directory_path(relative_path: str) -> str:
+    path = str(relative_path or "")
+    if not path:
+        return ""
+    if path.endswith("/"):
+        path = path[:-1]
+    if (not path or path.startswith("/") or "\\" in path or "\x00" in path
+            or any(ord(char) < 32 or ord(char) == 127 for char in path)
+            or any(part in ("", ".", "..") for part in path.split("/"))):
+        raise HTTPException(400, "无效的目标文件夹")
+    return f"{path}/"
+
+
+def library_safe_filename(filename: str) -> str:
+    if (not filename or filename in (".", "..") or "/" in filename or "\\" in filename
+            or any(ord(char) < 32 or ord(char) == 127 for char in filename)):
+        raise HTTPException(400, "文件名无效，请移除路径分隔符或控制字符")
+    if PurePosixPath(filename).suffix.lower() not in LIBRARY_FILE_EXTENSIONS:
+        raise HTTPException(400, "仅支持 PDF、图片、DOCX、Markdown 和 TXT 文件")
+    return filename
 
 
 app = FastAPI(title="Tibetan OCR Proofreading Workbench", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://tibetan-ocr-without-bdrc.zeabur.app", *sorted(LOCAL_WORKBENCH_ORIGINS)],
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Accept-Ranges", "Content-Disposition", "Content-Length", "Content-Range"],
 )
 
 
@@ -128,8 +157,12 @@ async def collaboration_login(request: Request) -> Response:
     if not collaboration.configured():
         raise HTTPException(503, "多人协作尚未配置阿里云数据库及登录环境变量")
     payload = await request.json()
-    response = JSONResponse({"ok": True, "name": str(payload.get("name") or "")})
-    collaboration.issue_session(str(payload.get("name") or ""), str(payload.get("password") or ""), response, request)
+    name = str(payload.get("name") or "")
+    response = JSONResponse({"ok": True, "name": name})
+    access_token = collaboration.issue_session(name, str(payload.get("password") or ""), response, request)
+    if request.headers.get("origin", "") in LOCAL_WORKBENCH_ORIGINS:
+        response.body = json.dumps({"ok": True, "name": name, "access_token": access_token}).encode("utf-8")
+        response.headers["content-length"] = str(len(response.body))
     return response
 
 
@@ -182,6 +215,69 @@ def list_library(request: Request, authorization: str = Header(default="")) -> d
             "updated_at": datetime.fromtimestamp(modified, timezone.utc).isoformat() if isinstance(modified, (int, float)) else str(modified or ""),
         })
     return {"folder": LIBRARY_PREFIX.rstrip("/"), "items": items, "truncated": truncated}
+
+
+@app.post("/api/library/upload")
+async def upload_library_file(request: Request, authorization: str = Header(default="")) -> dict[str, Any]:
+    if not collaboration.configured():
+        require_library_access(authorization)
+    async with request.form() as form:
+        file = form.get("file")
+        if not isinstance(file, StarletteUploadFile):
+            raise HTTPException(400, "请选择一个文件")
+        directory = form.get("path", "")
+        if not isinstance(directory, str):
+            raise HTTPException(400, "无效的目标文件夹")
+        directory = library_directory_path(directory)
+        filename = library_safe_filename(file.filename or "")
+        try:
+            file.file.seek(0, 2)
+            size = file.file.tell()
+            file.file.seek(0)
+        except (AttributeError, OSError) as exc:
+            raise HTTPException(400, "无法读取上传文件") from exc
+        if not size:
+            raise HTTPException(400, "上传文件为空")
+        if size > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"文件超过上限 {MAX_UPLOAD_BYTES} bytes")
+
+        relative_path = f"{directory}{filename}"
+        source_key = library_object_key(relative_path)
+        extension = PurePosixPath(filename).suffix.lower()
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        if extension == ".txt":
+            content_type = "text/plain; charset=utf-8"
+        elif extension in {".md", ".markdown"}:
+            content_type = "text/markdown; charset=utf-8"
+        bucket = oss_bucket()
+        try:
+            versioning_status = getattr(bucket.get_bucket_versioning(), "status", None)
+        except Exception as exc:
+            raise HTTPException(503, "无法确认 Bucket 版本管理状态，暂不能安全上传") from exc
+        if versioning_status in {"Enabled", "Suspended"}:
+            raise HTTPException(503, "当前 Bucket 启用了版本控制，暂不能保证同名文件不被覆盖")
+        try:
+            bucket.head_object(source_key)
+        except oss2.exceptions.NoSuchKey:
+            pass
+        except Exception as exc:
+            raise HTTPException(502, "无法确认云端文件是否重名，请稍后重试") from exc
+        else:
+            raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试")
+        try:
+            bucket.put_object(
+                source_key, file.file,
+                headers={"Content-Type": content_type, "x-oss-forbid-overwrite": "true"},
+            )
+        except oss2.exceptions.ObjectAlreadyExists as exc:
+            raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
+        except oss2.exceptions.ServerError as exc:
+            if getattr(exc, "status", None) in (409, 412):
+                raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
+            raise HTTPException(502, "上传到云端失败，请稍后重试") from exc
+        except Exception as exc:
+            raise HTTPException(502, "上传到云端失败，请稍后重试") from exc
+    return {"ok": True, "path": relative_path, "size": size, "content_type": content_type}
 
 
 @app.post("/api/library/open")

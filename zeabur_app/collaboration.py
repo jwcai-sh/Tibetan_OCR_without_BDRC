@@ -125,7 +125,7 @@ def _initialize_schema() -> None:
         db.close()
 
 
-def issue_session(name: str, password: str, response: Response, request: Request) -> None:
+def issue_session(name: str, password: str, response: Response, request: Request) -> str:
     valid_name = next((item for item in collaborators() if hmac.compare_digest(item, name)), None)
     shared_password = _env("COLLABORATION_PASSWORD")
     if not valid_name or (shared_password and not hmac.compare_digest(password, shared_password)):
@@ -133,11 +133,17 @@ def issue_session(name: str, password: str, response: Response, request: Request
     expires = int(time.time()) + 12 * 60 * 60
     body = base64.urlsafe_b64encode(json.dumps({"name": valid_name, "exp": expires}, separators=(",", ":")).encode()).decode().rstrip("=")
     sig = hmac.new(_env("COLLAB_SESSION_SECRET").encode(), body.encode(), hashlib.sha256).hexdigest()
-    response.set_cookie("tibetan_collab", f"{body}.{sig}", httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=12 * 60 * 60, path="/")
+    token = f"{body}.{sig}"
+    response.set_cookie("tibetan_collab", token, httponly=True, secure=request.url.scheme == "https", samesite="lax", max_age=12 * 60 * 60, path="/")
+    return token
 
 
 def current_actor(request: Request) -> str:
     token = request.cookies.get("tibetan_collab", "")
+    if not token:
+        scheme, _, bearer = request.headers.get("authorization", "").partition(" ")
+        if scheme.lower() == "bearer":
+            token = bearer
     try:
         body, signature = token.rsplit(".", 1)
         expected = hmac.new(_env("COLLAB_SESSION_SECRET").encode(), body.encode(), hashlib.sha256).hexdigest()
