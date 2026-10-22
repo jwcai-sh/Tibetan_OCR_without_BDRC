@@ -130,6 +130,18 @@ class CloudLibraryTest(unittest.TestCase):
             )
         self.assertEqual(versioned.status_code, 503)
 
+    def test_upload_explains_missing_bucket_versioning_permission(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        error = oss2.exceptions.AccessDenied(403, {}, b"", {"Code": "AccessDenied"})
+        with patch.object(self.bucket, "get_bucket_versioning", side_effect=error):
+            response = self.client.post(
+                "/api/library/upload", headers=headers,
+                files={"file": ("new.txt", b"text", "text/plain")},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("GetBucketVersioning", response.json()["detail"])
+        self.assertNotIn("待识别文档/new.txt", self.bucket.objects)
+
 
 if __name__ == "__main__":
     unittest.main()
