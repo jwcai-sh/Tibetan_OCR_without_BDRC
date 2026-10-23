@@ -3834,9 +3834,10 @@ function deferCurrentPageSourceHydration(pageNum, renderToken = state.renderToke
 async function renderCurrentPdfPageWithLocalService(token) {
   if (!state.pdfFile && !(isCloudDeployment() && state.remoteBookId)) return false;
   try {
-    const blob = await getRenderedPdfPageBlobWithCache(state.pageNum, 180);
+    const previewDpi = state.remoteServerPdf && window.matchMedia("(max-width: 760px)").matches ? 144 : 180;
+    const blob = await getRenderedPdfPageBlobWithCache(state.pageNum, previewDpi);
     if (token !== state.renderToken) return true;
-    const cacheKey = makePdfPageRenderCacheKey(state.pageNum, 180);
+    const cacheKey = makePdfPageRenderCacheKey(state.pageNum, previewDpi);
     const cached = state.pdfPageRenderCache.get(cacheKey);
     state.pdfPageRenderUrl = cached?.url || URL.createObjectURL(blob);
     if (cached && !cached.url) {
@@ -4052,6 +4053,18 @@ async function goToPage(pageNum, options = {}) {
   state.pageNum = nextPage;
   updateCollaborationPageNumber();
   clearSourceLineHighlight();
+  if (state.remoteServerPdf) {
+    refreshControls();
+    updateOcrPanelForPage();
+    updateTranslationPanelForPage();
+    updateThumbnailState();
+    els.pdfCanvas.style.display = "none";
+    els.imagePage.style.display = "none";
+    els.emptyState.style.display = "grid";
+    els.emptyState.textContent = `正在读取第 ${nextPage} 页原文，请稍候…`;
+    if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
+    setStatus(`正在加载第 ${nextPage} / ${state.pageCount} 页原文…`, "warn");
+  }
   try {
     await renderCurrentPage();
   } catch (error) {
@@ -4064,6 +4077,9 @@ async function goToPage(pageNum, options = {}) {
   }
   scheduleIdleWork(() => primeCurrentPageDirectText("page"));
   refreshControls();
+  if (state.remoteServerPdf && state.pageNum === nextPage) {
+    setStatus(`第 ${nextPage} / ${state.pageCount} 页原文已加载。`, "ok");
+  }
 }
 
 async function syncPageInputBeforeAction() {
