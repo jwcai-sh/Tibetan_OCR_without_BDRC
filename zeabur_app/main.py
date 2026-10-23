@@ -266,18 +266,6 @@ async def upload_library_file(request: Request, authorization: str = Header(defa
             content_type = "text/markdown; charset=utf-8"
         bucket = oss_bucket()
         try:
-            versioning_status = getattr(bucket.get_bucket_versioning(), "status", None)
-        except Exception as exc:
-            if getattr(exc, "code", "") == "AccessDenied":
-                raise HTTPException(
-                    503,
-                    "OSS 账号缺少 GetBucketVersioning 权限，无法安全确认 Bucket 版本状态；"
-                    "请给运行环境使用的 RAM 用户添加该权限后重试",
-                ) from exc
-            raise HTTPException(503, "无法确认 Bucket 版本管理状态，暂不能安全上传") from exc
-        if versioning_status in {"Enabled", "Suspended"}:
-            raise HTTPException(503, "当前 Bucket 启用了版本控制，暂不能保证同名文件不被覆盖")
-        try:
             bucket.head_object(source_key)
         except oss2.exceptions.NoSuchKey:
             pass
