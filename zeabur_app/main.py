@@ -450,7 +450,7 @@ def get_book_source(book_id: str, request: Request) -> Response:
 
 
 @app.get("/api/books/{book_id}/pages/{page_num}/preview")
-def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Response:
+def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: str = "png") -> Response:
     metadata = read_json(book_id, "metadata.json")
     source_key = str(metadata.get("source_key") or "")
     if not source_key or not str(metadata.get("name") or "").lower().endswith(".pdf"):
@@ -458,6 +458,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
     if page_num < 1:
         raise HTTPException(400, "页码必须大于零")
     safe_dpi = min(360, max(72, dpi))
+    preview_format = "jpeg" if format.lower() in ("jpeg", "jpg") else "png"
     try:
         import fitz
 
@@ -467,7 +468,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
             page = document.load_page(page_num - 1)
             bounded_dpi = min(safe_dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
             pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
-            png_bytes = pixmap.tobytes("png")
+            image_bytes = pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
     except HTTPException:
         raise
     except oss2.exceptions.NoSuchKey as exc:
@@ -475,7 +476,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
     except Exception as exc:
         logging.warning("Remote PDF preview failed for book %s page %s: %s", book_id, page_num, type(exc).__name__)
         raise HTTPException(502, "云端 PDF 单页预览失败，请稍后重试") from exc
-    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+    return Response(content=image_bytes, media_type=f"image/{preview_format}", headers={"Cache-Control": "private, no-store"})
 
 
 def remote_pdf_metadata(book_id: str) -> dict[str, Any]:

@@ -3835,9 +3835,10 @@ async function renderCurrentPdfPageWithLocalService(token) {
   if (!state.pdfFile && !(isCloudDeployment() && state.remoteBookId)) return false;
   try {
     const previewDpi = state.remoteServerPdf && window.matchMedia("(max-width: 760px)").matches ? 144 : 180;
-    const blob = await getRenderedPdfPageBlobWithCache(state.pageNum, previewDpi);
+    const previewFormat = state.remoteServerPdf ? "jpeg" : "png";
+    const blob = await getRenderedPdfPageBlobWithCache(state.pageNum, previewDpi, previewFormat);
     if (token !== state.renderToken) return true;
-    const cacheKey = makePdfPageRenderCacheKey(state.pageNum, previewDpi);
+    const cacheKey = makePdfPageRenderCacheKey(state.pageNum, previewDpi, previewFormat);
     const cached = state.pdfPageRenderCache.get(cacheKey);
     state.pdfPageRenderUrl = cached?.url || URL.createObjectURL(blob);
     if (cached && !cached.url) {
@@ -3863,21 +3864,21 @@ async function renderCurrentPdfPageWithLocalService(token) {
   }
 }
 
-function makePdfPageRenderCacheKey(pageNum, dpi) {
-  return `${state.sourceName}:${state.sourceSize}:${pageNum}:${dpi}`;
+function makePdfPageRenderCacheKey(pageNum, dpi, format = "png") {
+  return `${state.sourceName}:${state.sourceSize}:${pageNum}:${dpi}:${format}`;
 }
 
-async function getRenderedPdfPageBlobWithCache(pageNum, dpi) {
+async function getRenderedPdfPageBlobWithCache(pageNum, dpi, format = "png") {
   if ((state.batchOcr?.running || getSelectedOcrProfile().id === "traditional") && state.pdfDoc && state.pdfFile) {
     const page = await state.pdfDoc.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1 });
     dpi = getBatchPdfRenderDpi(viewport.width, viewport.height, dpi);
   }
-  const cacheKey = makePdfPageRenderCacheKey(pageNum, dpi);
+  const cacheKey = makePdfPageRenderCacheKey(pageNum, dpi, format);
   const cached = state.pdfPageRenderCache.get(cacheKey);
   if (cached?.blob) return cached.blob;
   if (cached?.pending) return cached.pending;
-  const pending = renderPdfPageBlobWithLocalService(pageNum, dpi);
+  const pending = renderPdfPageBlobWithLocalService(pageNum, dpi, format);
   state.pdfPageRenderCache.set(cacheKey, { pending, url: "" });
   try {
     const blob = await pending;
@@ -3895,11 +3896,11 @@ function getBatchPdfRenderDpi(width, height, requestedDpi) {
   return Math.min(requestedDpi, Math.max(72, Math.floor(4200 * 72 / Math.max(width, height, 1))));
 }
 
-async function renderPdfPageBlobWithLocalService(pageNum, dpi) {
+async function renderPdfPageBlobWithLocalService(pageNum, dpi, format = "png") {
   if (!state.pdfFile && isCloudDeployment() && state.remoteBookId) {
     const timeoutMs = state.remoteFirstPageDeadline
       ? Math.max(1, state.remoteFirstPageDeadline - Date.now()) : 120000;
-    const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}`, {
+    const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}&format=${format}`, {
       credentials: "same-origin",
     }, timeoutMs);
     if (!response.ok) {
