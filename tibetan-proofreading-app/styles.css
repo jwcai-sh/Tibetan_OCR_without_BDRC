@@ -1367,9 +1367,9 @@ body.is-resizing-panes * {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.78);
   color: var(--ink);
-  font-family: "Songti SC", "Noto Serif Tibetan", serif;
-  font-size: 15px;
-  line-height: 1.7;
+  font-family: "Noto Serif Tibetan", "Kailasa", "Microsoft Himalaya", "Noto Sans Tibetan", "Songti SC", serif;
+  font-size: 18px;
+  line-height: 1.9;
   text-align: left;
   white-space: pre-wrap;
 }
