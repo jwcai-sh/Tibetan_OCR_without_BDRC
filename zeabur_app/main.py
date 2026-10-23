@@ -8,9 +8,9 @@ import re
 import mimetypes
 import os
 import sys
-import tempfile
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
@@ -81,6 +81,20 @@ def read_json(book_id: str, suffix: str) -> dict[str, Any]:
     except oss2.exceptions.NoSuchKey as exc:
         raise HTTPException(404, "书籍或校对状态不存在") from exc
     return json.loads(body.decode("utf-8"))
+
+
+@lru_cache(maxsize=2)
+def cached_pdf_source(source_key: str, source_size: int) -> bytes:
+    source = oss_bucket().get_object(source_key)
+    try:
+        content = source.read()
+    finally:
+        close = getattr(source, "close", None)
+        if close:
+            close()
+    if not content or (source_size and len(content) != source_size):
+        raise HTTPException(502, "云端 PDF 下载不完整，请稍后重试")
+    return content
 
 
 def require_library_access(authorization: str) -> None:
@@ -447,24 +461,13 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
     try:
         import fitz
 
-        with tempfile.TemporaryDirectory(prefix="tibetan-pdf-preview-") as directory:
-            pdf_path = Path(directory) / "source.pdf"
-            source = oss_bucket().get_object(source_key)
-            try:
-                with pdf_path.open("wb") as output:
-                    while chunk := source.read(1024 * 1024):
-                        output.write(chunk)
-            finally:
-                close = getattr(source, "close", None)
-                if close:
-                    close()
-            with fitz.open(str(pdf_path)) as document:
-                if page_num > document.page_count:
-                    raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
-                page = document.load_page(page_num - 1)
-                bounded_dpi = min(safe_dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
-                pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
-                png_bytes = pixmap.tobytes("png")
+        with fitz.open(stream=cached_pdf_source(source_key, int(metadata.get("size") or 0)), filetype="pdf") as document:
+            if page_num > document.page_count:
+                raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
+            page = document.load_page(page_num - 1)
+            bounded_dpi = min(safe_dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
+            pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
+            png_bytes = pixmap.tobytes("png")
     except HTTPException:
         raise
     except oss2.exceptions.NoSuchKey as exc:
