@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_ocr, call_ai_page_review, call_ai_review_models
-from tibetan_translation_bridge import call_translation
+from tibetan_translation_bridge import call_translation, translation_health
 from zeabur_app import collaboration
 
 
@@ -672,6 +672,11 @@ async def ai_page_review(
 async def translate(request: Request) -> dict[str, Any]:
     payload = await request.json()
     return call_translation(payload)
+
+
+@app.get("/api/translate/health")
+def translate_health() -> dict[str, Any]:
+    return translation_health()
 
 
 @app.get("/")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def call_translation(payload: dict[str, Any]) -> dict[str, Any]:
+def _load_translation_module() -> Any:
     from importlib.util import module_from_spec, spec_from_file_location
     from pathlib import Path
 
@@ -13,4 +13,12 @@ def call_translation(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("无法加载藏译汉服务")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.translate_payload(payload)
+    return module
+
+
+def call_translation(payload: dict[str, Any]) -> dict[str, Any]:
+    return _load_translation_module().translate_payload(payload)
+
+
+def translation_health() -> dict[str, Any]:
+    return _load_translation_module().model_health_payload()

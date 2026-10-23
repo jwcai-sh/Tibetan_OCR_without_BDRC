@@ -5355,7 +5355,7 @@ function getTranslateHealthUrl(endpoint) {
   const url = new URL(endpoint, window.location.origin);
   const endpointPath = url.pathname.replace(/\/+$/, "");
   if (endpointPath.endsWith("/api/translate")) {
-    url.pathname = `${endpointPath.slice(0, -"/api/translate".length)}/health`;
+    url.pathname = `${endpointPath}/health`;
   } else if (endpointPath.endsWith("/translate")) {
     url.pathname = `${endpointPath.slice(0, -"/translate".length)}/health`;
   } else {
