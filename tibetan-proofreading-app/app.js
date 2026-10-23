@@ -5856,7 +5856,7 @@ async function getCurrentPageImageBlob() {
 async function getSourcePreviewPageBlob(pageNum) {
   if (state.sourceType === "image") return state.imageBlob;
   if (state.remoteServerPdf && state.remoteBookId) {
-    return getRenderedPdfPageBlobWithCache(pageNum, Number(els.dpiInput.value) || 260);
+    return getRenderedPdfPageBlobWithCache(pageNum, Number(els.dpiInput.value) || 260, "jpeg");
   }
   const pdfDoc = state.pdfDoc;
   if (!pdfDoc) return getCurrentPageImageBlob();
