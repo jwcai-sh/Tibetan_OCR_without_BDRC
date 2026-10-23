@@ -8,6 +8,7 @@ import re
 import mimetypes
 import os
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -432,6 +433,46 @@ def get_book_source(book_id: str, request: Request) -> Response:
         headers=headers,
         status_code=status_code,
     )
+
+
+@app.get("/api/books/{book_id}/pages/{page_num}/preview")
+def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Response:
+    metadata = read_json(book_id, "metadata.json")
+    source_key = str(metadata.get("source_key") or "")
+    if not source_key or not str(metadata.get("name") or "").lower().endswith(".pdf"):
+        raise HTTPException(404, "PDF 源文件不存在")
+    if page_num < 1:
+        raise HTTPException(400, "页码必须大于零")
+    safe_dpi = min(240, max(72, dpi))
+    try:
+        import fitz
+
+        with tempfile.TemporaryDirectory(prefix="tibetan-pdf-preview-") as directory:
+            pdf_path = Path(directory) / "source.pdf"
+            source = oss_bucket().get_object(source_key)
+            try:
+                with pdf_path.open("wb") as output:
+                    while chunk := source.read(1024 * 1024):
+                        output.write(chunk)
+            finally:
+                close = getattr(source, "close", None)
+                if close:
+                    close()
+            with fitz.open(str(pdf_path)) as document:
+                if page_num > document.page_count:
+                    raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
+                page = document.load_page(page_num - 1)
+                bounded_dpi = min(safe_dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
+                pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
+                png_bytes = pixmap.tobytes("png")
+    except HTTPException:
+        raise
+    except oss2.exceptions.NoSuchKey as exc:
+        raise HTTPException(404, "PDF 源文件不存在") from exc
+    except Exception as exc:
+        logging.warning("Remote PDF preview failed for book %s page %s: %s", book_id, page_num, type(exc).__name__)
+        raise HTTPException(502, "云端 PDF 单页预览失败，请稍后重试") from exc
+    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "private, no-store"})
 
 
 @app.put("/api/books/{book_id}/state")

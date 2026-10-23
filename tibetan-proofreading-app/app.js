@@ -1361,7 +1361,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       requestCollaborationLogin(project, workflow);
       return;
     }
-    if (!state.pageCount) els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
+    if (!state.pageCount || els.emptyState.style.display !== "none") {
+      els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
+    }
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
 }
@@ -2801,7 +2803,15 @@ async function loadPdf(file, options = {}) {
   refreshControls();
   await renderCurrentPage();
   if (options.requestId !== undefined && options.requestId !== state.documentRequestId) return false;
-  await primeCurrentPageDirectText("load");
+  const remoteMobilePdf = options.useRangeRequests && isCloudDeployment() && window.matchMedia("(max-width: 760px)").matches;
+  if (remoteMobilePdf) {
+    const loadedDoc = state.pdfDoc;
+    scheduleIdleWork(() => {
+      if (state.pdfDoc === loadedDoc) void primeCurrentPageDirectText();
+    });
+  } else {
+    await primeCurrentPageDirectText("load");
+  }
   if (options.requestId !== undefined && options.requestId !== state.documentRequestId) return false;
   const loadedDoc = state.pdfDoc;
   scheduleIdleWork(() => {
@@ -3601,6 +3611,16 @@ async function renderCurrentPage() {
 
   const token = ++state.renderToken;
   try {
+    if (isCloudDeployment() && state.remoteBookId && window.matchMedia("(max-width: 760px)").matches) {
+      if (await renderCurrentPdfPageWithLocalService(token)) {
+        syncPageControls(true);
+        renderActiveSourceHighlight();
+        updateOcrPanelForPage();
+        updateTranslationPanelForPage();
+        updateThumbnailState();
+        return;
+      }
+    }
     const page = await state.pdfDoc.getPage(state.pageNum);
     if (token !== state.renderToken) return;
 
@@ -3658,7 +3678,7 @@ function deferCurrentPageSourceHydration(pageNum, renderToken = state.renderToke
 }
 
 async function renderCurrentPdfPageWithLocalService(token) {
-  if (!state.pdfFile) return false;
+  if (!state.pdfFile && !(isCloudDeployment() && state.remoteBookId)) return false;
   try {
     const blob = await getRenderedPdfPageBlobWithCache(state.pageNum, 180);
     if (token !== state.renderToken) return true;
@@ -3691,7 +3711,7 @@ function makePdfPageRenderCacheKey(pageNum, dpi) {
 }
 
 async function getRenderedPdfPageBlobWithCache(pageNum, dpi) {
-  if ((state.batchOcr?.running || getSelectedOcrProfile().id === "traditional") && state.pdfDoc) {
+  if ((state.batchOcr?.running || getSelectedOcrProfile().id === "traditional") && state.pdfDoc && state.pdfFile) {
     const page = await state.pdfDoc.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1 });
     dpi = getBatchPdfRenderDpi(viewport.width, viewport.height, dpi);
@@ -3719,6 +3739,16 @@ function getBatchPdfRenderDpi(width, height, requestedDpi) {
 }
 
 async function renderPdfPageBlobWithLocalService(pageNum, dpi) {
+  if (!state.pdfFile && isCloudDeployment() && state.remoteBookId) {
+    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || `云端单页预览 HTTP ${response.status}`);
+    }
+    return response.blob();
+  }
   const formData = new FormData();
   formData.append("file", state.pdfFile, state.pdfFile.name || "source.pdf");
   formData.append("page", String(pageNum));
