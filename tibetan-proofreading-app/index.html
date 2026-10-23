@@ -478,7 +478,13 @@
               <i data-lucide="settings-2"></i>
               <span>角色管理</span>
             </button>
-            <span id="translationRoleModel" class="meta-pill role-model-pill">模型：默认</span>
+            <select id="translationRoleModel" class="meta-pill role-model-pill" aria-label="当前翻译模型" title="选择当前翻译角色使用的模型">
+              <option value="gemini:gemini-4-argon">Gemini 4 Argon</option>
+              <option value="gemini:gemini-3.8-flash">Gemini 3.8 Flash</option>
+              <option value="gemini:gemini-3.6-flash">Gemini 3.6 Flash</option>
+              <option value="gemini:gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+              <option value="gemini:gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+            </select>
           </div>
 
           <div class="ocr-toolbar">
@@ -575,7 +581,13 @@
               </label>
               <label class="wide-field">
                 模型
-                <input id="roleModelInput" type="text" placeholder="local:qwen3.6-27b:latest" />
+                <select id="roleModelInput" aria-label="翻译模型">
+                  <option value="gemini:gemini-4-argon">Gemini 4 Argon</option>
+                  <option value="gemini:gemini-3.8-flash">Gemini 3.8 Flash</option>
+                  <option value="gemini:gemini-3.6-flash">Gemini 3.6 Flash</option>
+                  <option value="gemini:gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+                  <option value="gemini:gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+                </select>
               </label>
               <label>
                 temperature

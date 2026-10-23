@@ -30,6 +30,7 @@ const LEGACY_WORKSPACE_LAYOUT_KEYS = [
 const WORKSPACE_LAYOUT_KEY = "tibetan-proofreading-app:workspace-layout:v4";
 const TRANSLATION_ROLES_KEY = "tibetan-proofreading-app:translation-roles";
 const ACTIVE_TRANSLATION_ROLE_KEY = "tibetan-proofreading-app:active-translation-role";
+const TRANSLATION_MODEL_OVERRIDES_KEY = "tibetan-proofreading-app:translation-model-overrides";
 const OCR_FONT_SIZE_MIN = 16;
 const OCR_FONT_SIZE_MAX = 36;
 const OCR_FONT_SIZE_STEP = 2;
@@ -584,6 +585,20 @@ function wireEvents() {
     state.activeTranslationRoleId = els.translationRoleSelect.value;
     saveActiveTranslationRole();
     renderActiveTranslationRoleMeta();
+  });
+  els.translationRoleModel.addEventListener("change", () => {
+    const role = getActiveTranslationRole();
+    role.model = els.translationRoleModel.value;
+    if (role.builtIn) {
+      const overrides = readTranslationModelOverrides();
+      overrides[role.id] = role.model;
+      window.localStorage.setItem(TRANSLATION_MODEL_OVERRIDES_KEY, JSON.stringify(overrides));
+    } else {
+      saveCustomTranslationRoles();
+    }
+    renderActiveTranslationRoleMeta();
+    renderRoleList();
+    setStatus(`当前角色模型已切换为 ${role.model}。`, "ok");
   });
   els.manageRolesButton.addEventListener("click", openRoleManager);
   els.closeRoleManagerButton.addEventListener("click", closeRoleManager);
@@ -3390,6 +3405,10 @@ function restoreTranslationRoles() {
     ...BUILT_IN_TRANSLATION_ROLES.map((role) => ({ ...role })),
     ...normalizedCustomRoles,
   ];
+  const modelOverrides = readTranslationModelOverrides();
+  state.translationRoles.forEach((role) => {
+    if (role.builtIn && modelOverrides[role.id]) role.model = modelOverrides[role.id];
+  });
   state.activeTranslationRoleId = window.localStorage.getItem(ACTIVE_TRANSLATION_ROLE_KEY) || "academic-literal";
   if (!state.translationRoles.some((role) => role.id === state.activeTranslationRoleId)) {
     state.activeTranslationRoleId = "academic-literal";
@@ -3430,6 +3449,15 @@ function saveActiveTranslationRole() {
   window.localStorage.setItem(ACTIVE_TRANSLATION_ROLE_KEY, state.activeTranslationRoleId);
 }
 
+function readTranslationModelOverrides() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(TRANSLATION_MODEL_OVERRIDES_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function getActiveTranslationRole() {
   const role = state.translationRoles.find((item) => item.id === state.activeTranslationRoleId);
   if (role) return role;
@@ -3460,7 +3488,7 @@ function renderTranslationRoleOptions() {
 function renderActiveTranslationRoleMeta() {
   const role = getActiveTranslationRole();
   if (els.translationRoleModel) {
-    els.translationRoleModel.textContent = `模型：${role.model || DEFAULT_TRANSLATION_MODEL}`;
+    setModelSelectValue(els.translationRoleModel, role.model || DEFAULT_TRANSLATION_MODEL);
     els.translationRoleModel.title = `${role.name} · ${role.sourceLang} → ${role.targetLang}`;
   }
 }
@@ -3505,12 +3533,24 @@ function loadRoleForm(role) {
   els.roleIdInput.value = target.id || "";
   els.roleSourceLangInput.value = target.sourceLang || "bo";
   els.roleTargetLangInput.value = target.targetLang || "zh";
-  els.roleModelInput.value = target.model || DEFAULT_TRANSLATION_MODEL;
+  setModelSelectValue(els.roleModelInput, target.model || DEFAULT_TRANSLATION_MODEL);
   els.roleTemperatureInput.value = String(target.temperature ?? 0.2);
   els.roleMaxTokensInput.value = String(target.maxTokens ?? 2048);
   els.roleSystemPromptInput.value = target.systemPrompt || "";
   els.roleUserPromptTemplateInput.value = target.userPromptTemplate || "";
   els.deleteRoleButton.disabled = Boolean(target.builtIn);
+}
+
+function setModelSelectValue(select, model) {
+  if (!select) return;
+  const hasModelOption = Array.from(select.options).some((option) => option.value === model);
+  if (!hasModelOption) {
+    const legacyOption = document.createElement("option");
+    legacyOption.value = model;
+    legacyOption.textContent = `当前配置：${model}`;
+    select.prepend(legacyOption);
+  }
+  select.value = model;
 }
 
 function createDraftTranslationRole() {
@@ -3596,6 +3636,7 @@ function resetCustomTranslationRoles() {
   state.activeTranslationRoleId = "academic-literal";
   state.editingRoleId = "academic-literal";
   window.localStorage.removeItem(TRANSLATION_ROLES_KEY);
+  window.localStorage.removeItem(TRANSLATION_MODEL_OVERRIDES_KEY);
   saveActiveTranslationRole();
   renderTranslationRoleOptions();
   renderActiveTranslationRoleMeta();
