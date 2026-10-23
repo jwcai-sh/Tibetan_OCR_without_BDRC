@@ -5257,7 +5257,7 @@ async function checkTranslateService() {
     return;
   }
 
-  const healthUrl = endpoint.replace(/\/translate\/?$/, "/health");
+  const healthUrl = getTranslateHealthUrl(endpoint);
   try {
     setStatus("正在检查本地藏译汉服务...", "warn");
     const payload = await fetchTranslateHealth(endpoint);
@@ -5282,12 +5282,27 @@ async function checkTranslateService() {
 }
 
 async function fetchTranslateHealth(endpoint) {
-  const healthUrl = endpoint.replace(/\/translate\/?$/, "/health");
+  const healthUrl = getTranslateHealthUrl(endpoint);
   const response = await fetch(healthUrl, { method: "GET" });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
   return response.json().catch(() => ({}));
+}
+
+function getTranslateHealthUrl(endpoint) {
+  const url = new URL(endpoint, window.location.origin);
+  const endpointPath = url.pathname.replace(/\/+$/, "");
+  if (endpointPath.endsWith("/api/translate")) {
+    url.pathname = `${endpointPath.slice(0, -"/api/translate".length)}/health`;
+  } else if (endpointPath.endsWith("/translate")) {
+    url.pathname = `${endpointPath.slice(0, -"/translate".length)}/health`;
+  } else {
+    url.pathname = `${endpointPath}/health`;
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 async function ensureTranslateReady(endpoint) {
