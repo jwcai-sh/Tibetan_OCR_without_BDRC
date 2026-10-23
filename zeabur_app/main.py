@@ -232,6 +232,33 @@ def list_library(request: Request, authorization: str = Header(default="")) -> d
     return {"folder": LIBRARY_PREFIX.rstrip("/"), "items": items, "truncated": truncated}
 
 
+def library_upload_error(exc: Exception, stage: str) -> HTTPException:
+    # Never include SDK exception text: it can contain signed URLs or credentials.
+    def safe_token(value: Any) -> str:
+        return re.sub(r"[^a-zA-Z0-9_.-]", "", str(value or ""))[:96]
+
+    code = safe_token(getattr(exc, "code", "")) or type(exc).__name__
+    request_id = safe_token(getattr(exc, "request_id", ""))
+    status = safe_token(getattr(exc, "status", ""))
+    logging.getLogger(__name__).warning(
+        "library_upload_failed stage=%s status=%s code=%s request_id=%s",
+        stage, status, code, request_id,
+    )
+    if code == "AccessDenied":
+        action = "写入" if stage == "put" else "读取文件信息"
+        message = f"OSS 拒绝{action}，请管理员检查待识别文档目录的权限"
+    elif code in {"InvalidAccessKeyId", "SignatureDoesNotMatch", "SecurityTokenExpired"}:
+        message = "OSS 身份认证失败，请管理员检查服务端凭据配置"
+    elif code in {"RequestTimeout", "ConnectionTimeout", "ReadTimeout", "RequestError"}:
+        message = "连接 OSS 失败或超时，请稍后重试"
+    else:
+        message = "上传到云端失败" if stage == "put" else "无法确认云端文件是否重名"
+    detail = f"{message}（错误码：{code}"
+    if request_id:
+        detail += f"；请求编号：{request_id}"
+    return HTTPException(502, detail + "）")
+
+
 @app.post("/api/library/upload")
 async def upload_library_file(request: Request, authorization: str = Header(default="")) -> dict[str, Any]:
     if not collaboration.configured():
@@ -270,7 +297,7 @@ async def upload_library_file(request: Request, authorization: str = Header(defa
         except oss2.exceptions.NoSuchKey:
             pass
         except Exception as exc:
-            raise HTTPException(502, "无法确认云端文件是否重名，请稍后重试") from exc
+            raise library_upload_error(exc, "head") from exc
         else:
             raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试")
         try:
@@ -283,9 +310,9 @@ async def upload_library_file(request: Request, authorization: str = Header(defa
         except oss2.exceptions.ServerError as exc:
             if getattr(exc, "status", None) in (409, 412):
                 raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
-            raise HTTPException(502, "上传到云端失败，请稍后重试") from exc
+            raise library_upload_error(exc, "put") from exc
         except Exception as exc:
-            raise HTTPException(502, "上传到云端失败，请稍后重试") from exc
+            raise library_upload_error(exc, "put") from exc
     return {"ok": True, "path": relative_path, "size": size, "content_type": content_type}
 
 
