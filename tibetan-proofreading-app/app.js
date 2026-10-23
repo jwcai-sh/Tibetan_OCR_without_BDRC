@@ -215,6 +215,8 @@ const state = {
   remotePageSnapshots: {},
   remoteDeferredPages: new Set(),
   remoteSaveTimer: null,
+  remoteSavePromise: null,
+  remotePendingPayload: null,
   layoutHydrationInFlight: new Map(),
   activeProjectRestoreInFlight: false,
   documentRequestId: 0,
@@ -1390,6 +1392,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       translationResults: serializeResultMap(state.translationResults),
       ocrQualityReviews: state.ocrQualityReviews,
     });
+    for (const page of pendingPages) {
+      state.remotePageSnapshots[page] = remotePageFingerprint(cloudCache, page);
+    }
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
     state.remoteRestoreComplete = true;
@@ -3102,6 +3107,8 @@ function resetDocumentState() {
     window.clearTimeout(state.remoteSaveTimer);
     state.remoteSaveTimer = null;
   }
+  state.remoteSavePromise = null;
+  state.remotePendingPayload = null;
   state.renderToken += 1;
 
   els.thumbnailList.innerHTML = "";
@@ -3282,49 +3289,74 @@ async function createRemoteBook(file, requestId = state.documentRequestId) {
 function scheduleRemoteStateSave(payload, immediate = false) {
   if (!isCloudDeployment() || !state.remoteBookId || state.remoteRestoreInFlight || !state.remoteRestoreComplete) return;
   if (state.remoteSaveTimer) window.clearTimeout(state.remoteSaveTimer);
+  state.remotePendingPayload = payload;
+  if (immediate || state.remoteSavePromise) return flushRemoteStateSaves();
+  state.remoteSaveTimer = window.setTimeout(() => void flushRemoteStateSaves(), 500);
+}
+
+async function flushRemoteStateSaves() {
+  state.remoteSaveTimer = null;
+  if (state.remoteSavePromise) return state.remoteSavePromise;
   const bookId = state.remoteBookId;
-  const save = async () => {
-    state.remoteSaveTimer = null;
-    try {
+  const drain = (async () => {
+    while (state.remotePendingPayload && state.remoteBookId === bookId && state.remoteRestoreComplete) {
+      const payload = state.remotePendingPayload;
+      state.remotePendingPayload = null;
       const changedPages = findChangedRemotePages(payload, state.remotePageSnapshots);
-      const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...payload,
-          book_id: bookId,
-          ocr_results: payload.ocrResults,
-          translation_results: payload.translationResults,
-          base_page_revisions: state.remotePageRevisions || {},
-          changed_pages: changedPages,
-        }),
-      });
-      const responsePayload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const detail = typeof responsePayload.detail === "object" ? responsePayload.detail.message : responsePayload.detail;
-        if (response.status === 409 && Array.isArray(responsePayload.detail?.pages)) {
-          throw new Error(`第 ${responsePayload.detail.pages.join("、")} 页有其他协作者的新修改，请重新加载后复核；本地内容已保留。`);
+      if (!changedPages.length) continue;
+      try {
+        const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
+          body: JSON.stringify({
+            ...payload,
+            book_id: bookId,
+            ocr_results: payload.ocrResults,
+            translation_results: payload.translationResults,
+            base_page_revisions: state.remotePageRevisions || {},
+            changed_pages: changedPages,
+          }),
+        });
+        const responsePayload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const detail = typeof responsePayload.detail === "object" ? responsePayload.detail.message : responsePayload.detail;
+          if (response.status === 409 && Array.isArray(responsePayload.detail?.pages)) {
+            throw new Error(`第 ${responsePayload.detail.pages.join("、")} 页有其他协作者的新修改，请重新加载后复核；本地内容已保留。`);
+          }
+          throw new Error(detail || `HTTP ${response.status}`);
         }
-        throw new Error(detail || `HTTP ${response.status}`);
+        if (state.remoteBookId !== bookId) break;
+        state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
+        for (const page of changedPages) {
+          state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
+          state.remoteDeferredPages.delete(page);
+        }
+        if (/云端校对状态暂时无法加载|云端校对状态同步失败|正在同步云端|已保留本机第|待复核同步|当前页各行的修改已自动保存/.test(els.statusBar.textContent || "")) {
+          setStatus(state.remoteDeferredPages.size
+            ? `当前修改已同步；本机第 ${[...state.remoteDeferredPages].join("、")} 页仍待复核同步。`
+            : "云端校对状态已同步。", state.remoteDeferredPages.size ? "warn" : "ok");
+        }
+      } catch (error) {
+        if (state.remoteBookId !== bookId) break;
+        console.warn("Failed to save remote OCR state", error);
+        state.remotePendingPayload = null;
+        state.remoteRestoreComplete = false;
+        if (els.sourceRetryButton) {
+          els.sourceRetryButton.textContent = "重试云端校对状态";
+          els.sourceRetryButton.hidden = false;
+        }
+        setStatus(`本地已保存，但云端校对状态同步失败：${error.message || error}。请重试云端校对状态。`, "warn");
+        setCollaborationFeedback(error.message || String(error), true);
+        break;
       }
-      state.remotePageRevisions = responsePayload.page_revisions || state.remotePageRevisions;
-      for (const page of changedPages) {
-        state.remotePageSnapshots[page] = remotePageFingerprint(payload, page);
-        state.remoteDeferredPages.delete(page);
-      }
-      if (/云端校对状态暂时无法加载|云端校对状态同步失败|正在同步云端|已保留本机第|待复核同步/.test(els.statusBar.textContent || "")) {
-        setStatus(state.remoteDeferredPages.size
-          ? `当前修改已同步；本机第 ${[...state.remoteDeferredPages].join("、")} 页仍待复核同步。`
-          : "云端校对状态已同步。", state.remoteDeferredPages.size ? "warn" : "ok");
-      }
-    } catch (error) {
-      console.warn("Failed to save remote OCR state", error);
-      setStatus(`本地已保存，但云端校对状态同步失败：${error.message || error}`, "warn");
-      if (String(error.message || error).includes("重新加载后复核")) setCollaborationFeedback(error.message || String(error), true);
     }
-  };
-  if (immediate) return save();
-  state.remoteSaveTimer = window.setTimeout(save, 500);
+  })();
+  state.remoteSavePromise = drain;
+  try { await drain; }
+  finally {
+    if (state.remoteSavePromise === drain) state.remoteSavePromise = null;
+  }
 }
 
 function remotePageFingerprint(payload, page) {
