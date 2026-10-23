@@ -5391,6 +5391,8 @@ async function runTranslateForCurrentPage() {
   }
 
   await syncPageInputBeforeAction();
+  const translationPageNum = state.pageNum;
+  const documentRequestId = state.documentRequestId;
 
   const endpoint = els.translateEndpointInput.value.trim();
   if (!endpoint) {
@@ -5402,6 +5404,10 @@ async function runTranslateForCurrentPage() {
     setStatus(`正在检查第 ${state.pageNum} 页 PDF 文本层...`, "warn");
   }
   const sourceInput = await resolveCurrentSourceTextForTranslation();
+  if (state.pageNum !== translationPageNum || state.documentRequestId !== documentRequestId) {
+    setStatus("页面已切换，请在需要翻译的页重新点击“翻译”。", "warn");
+    return;
+  }
   if (!sourceInput.text) {
     const message = state.sourceType === "pdf"
       ? "当前 PDF 页没有可提取文本，也没有 OCR/人工校对文本；如果是扫描件，请先点“识别”。"
@@ -5418,7 +5424,7 @@ async function runTranslateForCurrentPage() {
     if (!ready) {
       return;
     }
-    setStatus(`正在翻译第 ${state.pageNum} 页${sourceInput.label || "源文本"}...`, "warn");
+    setStatus(`正在翻译第 ${translationPageNum} 页${sourceInput.label || "源文本"}...`, "warn");
     const response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5431,7 +5437,7 @@ async function runTranslateForCurrentPage() {
         target_lang: role.targetLang || "zh",
         src_lang: "bod_Tibt",
         tgt_lang: "zho_Hans",
-        page: state.pageNum,
+        page: translationPageNum,
         source_name: state.sourceName,
         role_id: role.id,
         role_name: role.name,
@@ -5443,13 +5449,15 @@ async function runTranslateForCurrentPage() {
       }),
     });
 
-    const parsed = await parseTranslationResponse(response);
-    if (!response.ok) {
-      throw new Error(parsed.error || `HTTP ${response.status}`);
-    }
+    const parsed = await awaitTranslationResponse(response, endpoint);
 
     const text = parsed.text.trim();
-    state.translationResults.set(state.pageNum, {
+    if (!text) throw new Error("翻译模型没有返回译文，请检查模型服务日志。");
+    if (state.documentRequestId !== documentRequestId) {
+      setStatus(`第 ${translationPageNum} 页翻译完成，但已切换项目；结果未写入当前项目。`, "warn");
+      return;
+    }
+    state.translationResults.set(translationPageNum, {
       text,
       raw: parsed.raw,
       source: "api",
@@ -5458,9 +5466,11 @@ async function runTranslateForCurrentPage() {
       updatedAt: new Date().toISOString(),
     });
     saveCachedResults();
-    els.translationText.value = text;
-    setStatus(`第 ${state.pageNum} 页藏译汉完成。`, "ok");
-    updateTranslationPanelForPage();
+    if (state.pageNum === translationPageNum) {
+      els.translationText.value = text;
+      updateTranslationPanelForPage();
+    }
+    setStatus(`第 ${translationPageNum} 页藏译汉完成${state.pageNum === translationPageNum ? "" : "，返回该页查看"}。`, "ok");
     updateTranslationSummary();
     updateThumbnailState();
   } catch (error) {
@@ -5468,6 +5478,34 @@ async function runTranslateForCurrentPage() {
   } finally {
     setTranslateBusy(false);
   }
+}
+
+async function awaitTranslationResponse(response, endpoint) {
+  let parsed = await parseTranslationResponse(response);
+  if (!response.ok) throw new Error(parsed.error || `HTTP ${response.status}`);
+  if (response.status !== 202) return parsed;
+
+  const statusPath = parsed.raw?.status_url;
+  if (!statusPath) throw new Error("翻译服务未返回任务查询地址。");
+  const statusUrl = new URL(statusPath, endpoint);
+  if (statusUrl.origin !== new URL(endpoint, window.location.origin).origin
+      || !statusUrl.pathname.startsWith("/api/translate/jobs/")) {
+    throw new Error("翻译服务返回了无效的任务查询地址。");
+  }
+  const deadline = Date.now() + 6 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+    const poll = await fetch(statusUrl.toString(), { cache: "no-store" });
+    parsed = await parseTranslationResponse(poll);
+    if (!poll.ok) throw new Error(parsed.error || `HTTP ${poll.status}`);
+    if (parsed.raw?.status === "queued" || parsed.raw?.status === "running") continue;
+    if (!parsed.raw || typeof parsed.raw !== "object"
+        || !("translation" in parsed.raw || "translated_text" in parsed.raw || "text" in parsed.raw)) {
+      throw new Error("翻译服务返回了无效的任务结果，请检查服务日志。");
+    }
+    return parsed;
+  }
+  throw new Error("翻译任务等待超过 6 分钟，请检查服务状态后重试。");
 }
 
 async function resolveCurrentSourceTextForTranslation() {

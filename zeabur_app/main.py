@@ -8,7 +8,10 @@ import re
 import mimetypes
 import os
 import sys
+import threading
+import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -49,6 +52,11 @@ LIBRARY_FILE_EXTENSIONS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff",
     ".docx", ".md", ".markdown", ".txt",
 }
+TRANSLATION_JOB_TTL_SECONDS = 600
+TRANSLATION_MAX_JOBS = 8
+translation_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="translation")
+translation_jobs: dict[str, tuple[Future, str, float]] = {}
+translation_jobs_lock = threading.Lock()
 
 
 def oss_bucket() -> oss2.Bucket:
@@ -683,23 +691,53 @@ async def ai_page_review(
         raise HTTPException(400, str(exc)) from exc
 
 
+def translation_failure_detail(exc: Exception) -> str:
+    message = str(exc)
+    upstream_status = re.search(r"\bHTTP (\d{3})\b", message)
+    if upstream_status:
+        return f"翻译模型服务返回 HTTP {upstream_status.group(1)}，请检查所选模型及服务配置"
+    if "timed out" in message.lower() or "timeout" in message.lower():
+        return "翻译模型服务响应超时，请稍后重试"
+    if "request failed" in message.lower():
+        return "无法连接翻译模型服务，请检查服务地址与网络"
+    return "翻译模型服务调用失败，请检查模型聚合服务日志"
+
+
 @app.post("/api/translate")
-async def translate(request: Request) -> dict[str, Any]:
+async def translate(request: Request) -> Response:
     payload = await request.json()
+    actor = getattr(request.state, "collaborator", "")
+    now = time.monotonic()
+    with translation_jobs_lock:
+        for job_id, (future, _, created_at) in list(translation_jobs.items()):
+            if future.done() and now - created_at > TRANSLATION_JOB_TTL_SECONDS:
+                del translation_jobs[job_id]
+        if len(translation_jobs) >= TRANSLATION_MAX_JOBS:
+            raise HTTPException(503, "翻译任务较多，请稍后重试")
+        job_id = uuid.uuid4().hex
+        translation_jobs[job_id] = (translation_executor.submit(call_translation, payload), actor, now)
+    return JSONResponse(
+        {"status": "queued", "job_id": job_id, "status_url": f"/api/translate/jobs/{job_id}"},
+        status_code=202,
+    )
+
+
+@app.get("/api/translate/jobs/{job_id}")
+def translation_job(request: Request, job_id: str) -> dict[str, Any]:
+    with translation_jobs_lock:
+        job = translation_jobs.get(job_id)
+    if job is None or job[1] != getattr(request.state, "collaborator", ""):
+        raise HTTPException(404, "翻译任务不存在或已过期，请重新翻译")
+    future, _, created_at = job
+    if time.monotonic() - created_at > TRANSLATION_JOB_TTL_SECONDS:
+        raise HTTPException(410, "翻译任务已过期，请重新翻译")
+    if not future.done():
+        return {"status": "running"}
     try:
-        return call_translation(payload)
-    except (RuntimeError, TimeoutError) as exc:
-        message = str(exc)
-        upstream_status = re.search(r"\bHTTP (\d{3})\b", message)
-        if upstream_status:
-            detail = f"翻译模型服务返回 HTTP {upstream_status.group(1)}，请检查所选模型及服务配置"
-        elif "timed out" in message.lower() or "timeout" in message.lower():
-            detail = "翻译模型服务响应超时，请稍后重试"
-        elif "request failed" in message.lower():
-            detail = "无法连接翻译模型服务，请检查服务地址与网络"
-        else:
-            detail = "翻译模型服务调用失败，请检查模型聚合服务日志"
-        raise HTTPException(status_code=502, detail=detail) from exc
+        return future.result()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Translation job failed: %s", type(exc).__name__)
+        raise HTTPException(502, translation_failure_detail(exc)) from exc
 
 
 @app.get("/api/translate/health")
