@@ -686,7 +686,20 @@ async def ai_page_review(
 @app.post("/api/translate")
 async def translate(request: Request) -> dict[str, Any]:
     payload = await request.json()
-    return call_translation(payload)
+    try:
+        return call_translation(payload)
+    except (RuntimeError, TimeoutError) as exc:
+        message = str(exc)
+        upstream_status = re.search(r"\bHTTP (\d{3})\b", message)
+        if upstream_status:
+            detail = f"翻译模型服务返回 HTTP {upstream_status.group(1)}，请检查所选模型及服务配置"
+        elif "timed out" in message.lower() or "timeout" in message.lower():
+            detail = "翻译模型服务响应超时，请稍后重试"
+        elif "request failed" in message.lower():
+            detail = "无法连接翻译模型服务，请检查服务地址与网络"
+        else:
+            detail = "翻译模型服务调用失败，请检查模型聚合服务日志"
+        raise HTTPException(status_code=502, detail=detail) from exc
 
 
 @app.get("/api/translate/health")
