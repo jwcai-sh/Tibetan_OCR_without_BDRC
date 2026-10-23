@@ -52,10 +52,10 @@ LIBRARY_FILE_EXTENSIONS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff",
     ".docx", ".md", ".markdown", ".txt",
 }
-TRANSLATION_JOB_TTL_SECONDS = 600
-TRANSLATION_MAX_JOBS = 8
+TRANSLATION_JOB_TTL_SECONDS = 1800
+TRANSLATION_MAX_JOBS = 4
 translation_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="translation")
-translation_jobs: dict[str, tuple[Future, str, float]] = {}
+translation_jobs: dict[str, tuple[Future, str, float, dict[str, int]]] = {}
 translation_jobs_lock = threading.Lock()
 
 
@@ -709,13 +709,16 @@ async def translate(request: Request) -> Response:
     actor = getattr(request.state, "collaborator", "")
     now = time.monotonic()
     with translation_jobs_lock:
-        for job_id, (future, _, created_at) in list(translation_jobs.items()):
+        for job_id, (future, _, created_at, _) in list(translation_jobs.items()):
             if future.done() and now - created_at > TRANSLATION_JOB_TTL_SECONDS:
                 del translation_jobs[job_id]
-        if len(translation_jobs) >= TRANSLATION_MAX_JOBS:
+        if sum(not future.done() for future, _, _, _ in translation_jobs.values()) >= TRANSLATION_MAX_JOBS:
             raise HTTPException(503, "翻译任务较多，请稍后重试")
         job_id = uuid.uuid4().hex
-        translation_jobs[job_id] = (translation_executor.submit(call_translation, payload), actor, now)
+        progress = {"completed": 0, "total": 0}
+        job_payload = dict(payload)
+        job_payload["_progress"] = lambda completed, total: progress.update(completed=completed, total=total)
+        translation_jobs[job_id] = (translation_executor.submit(call_translation, job_payload), actor, now, progress)
     return JSONResponse(
         {"status": "queued", "job_id": job_id, "status_url": f"/api/translate/jobs/{job_id}"},
         status_code=202,
@@ -728,11 +731,11 @@ def translation_job(request: Request, job_id: str) -> dict[str, Any]:
         job = translation_jobs.get(job_id)
     if job is None or job[1] != getattr(request.state, "collaborator", ""):
         raise HTTPException(404, "翻译任务不存在或已过期，请重新翻译")
-    future, _, created_at = job
+    future, _, created_at, progress = job
     if time.monotonic() - created_at > TRANSLATION_JOB_TTL_SECONDS:
         raise HTTPException(410, "翻译任务已过期，请重新翻译")
     if not future.done():
-        return {"status": "running"}
+        return {"status": "running", "completed": progress["completed"], "total": progress["total"]}
     try:
         return future.result()
     except Exception as exc:

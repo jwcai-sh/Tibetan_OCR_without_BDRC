@@ -5470,7 +5470,10 @@ async function runTranslateForCurrentPage() {
       els.translationText.value = text;
       updateTranslationPanelForPage();
     }
-    setStatus(`第 ${translationPageNum} 页藏译汉完成${state.pageNum === translationPageNum ? "" : "，返回该页查看"}。`, "ok");
+    const modelNote = parsed.raw?.fallback_used
+      ? "；所选模型繁忙，已改用 Gemini 3.6 Flash"
+      : "";
+    setStatus(`第 ${translationPageNum} 页藏译汉完成${modelNote}${state.pageNum === translationPageNum ? "" : "，返回该页查看"}。`, "ok");
     updateTranslationSummary();
     updateThumbnailState();
   } catch (error) {
@@ -5492,20 +5495,25 @@ async function awaitTranslationResponse(response, endpoint) {
       || !statusUrl.pathname.startsWith("/api/translate/jobs/")) {
     throw new Error("翻译服务返回了无效的任务查询地址。");
   }
-  const deadline = Date.now() + 6 * 60 * 1000;
+  const deadline = Date.now() + 20 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((resolve) => window.setTimeout(resolve, 2000));
     const poll = await fetch(statusUrl.toString(), { cache: "no-store" });
     parsed = await parseTranslationResponse(poll);
     if (!poll.ok) throw new Error(parsed.error || `HTTP ${poll.status}`);
-    if (parsed.raw?.status === "queued" || parsed.raw?.status === "running") continue;
+    if (parsed.raw?.status === "queued" || parsed.raw?.status === "running") {
+      if (parsed.raw.total > 0) {
+        setStatus(`正在翻译当前页：已完成 ${parsed.raw.completed}/${parsed.raw.total} 段。`, "warn");
+      }
+      continue;
+    }
     if (!parsed.raw || typeof parsed.raw !== "object"
         || !("translation" in parsed.raw || "translated_text" in parsed.raw || "text" in parsed.raw)) {
       throw new Error("翻译服务返回了无效的任务结果，请检查服务日志。");
     }
     return parsed;
   }
-  throw new Error("翻译任务等待超过 6 分钟，请检查服务状态后重试。");
+  throw new Error("翻译任务等待超过 20 分钟，请检查服务状态后重试。");
 }
 
 async function resolveCurrentSourceTextForTranslation() {

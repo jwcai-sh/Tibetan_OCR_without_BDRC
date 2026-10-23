@@ -284,6 +284,36 @@ def split_text(text: str) -> list[str]:
     return chunks or [text.strip()]
 
 
+def split_model_translation_text(text: str, max_chars: int = 500) -> list[str]:
+    """Keep page order while bounding each model request to a short passage."""
+    chunks: list[str] = []
+    current = ""
+    for original_line in text.replace("\r\n", "\n").split("\n"):
+        line = original_line.strip()
+        if not line:
+            if current:
+                chunks.append(current)
+                current = ""
+            continue
+        while line:
+            available = max_chars - len(current) - bool(current)
+            if len(line) <= available:
+                current = f"{current}\n{line}" if current else line
+                break
+            if current:
+                chunks.append(current)
+                current = ""
+                continue
+            cut = max(line.rfind(separator, max_chars // 2, max_chars)
+                      for separator in ("།", "。", " "))
+            cut = cut + 1 if cut >= 0 else max_chars
+            chunks.append(line[:cut].strip())
+            line = line[cut:].strip()
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def translate_payload(payload: dict[str, Any]) -> dict[str, Any]:
     text = payload.get("text") or payload.get("source_text") or payload.get("input") or ""
     if not isinstance(text, str):
@@ -355,7 +385,8 @@ def translate_text(text: str, payload: dict[str, Any] | None = None) -> dict[str
 
 
 def translate_text_model_aggregator(text: str, payload: dict[str, Any]) -> dict[str, Any]:
-    model = str(payload.get("model") or MODEL_AGGREGATOR_MODEL).strip() or MODEL_AGGREGATOR_MODEL
+    requested_model = str(payload.get("model") or MODEL_AGGREGATOR_MODEL).strip() or MODEL_AGGREGATOR_MODEL
+    model = requested_model
     source_lang = str(payload.get("source_lang") or payload.get("src_lang") or SRC_LANG)
     target_lang = str(payload.get("target_lang") or payload.get("tgt_lang") or TGT_LANG)
     role_id = str(payload.get("role_id") or "academic-literal")
@@ -364,49 +395,80 @@ def translate_text_model_aggregator(text: str, payload: dict[str, Any]) -> dict[
     user_prompt_template = str(payload.get("user_prompt_template") or DEFAULT_USER_PROMPT_TEMPLATE)
     temperature = coerce_float(payload.get("temperature"), 0.2)
     max_tokens = coerce_int(payload.get("max_tokens") or payload.get("maxTokens"), 2048)
+    if model.startswith("gemini:"):
+        max_tokens = max(max_tokens, 4096)
     page = payload.get("page") if payload.get("page") not in {None, ""} else "当前页"
     source_name = str(payload.get("source_name") or "未命名文件")
 
-    user_prompt = render_prompt_template(user_prompt_template, {
-        "source_text": text,
-        "source_lang": source_lang,
-        "target_lang": target_lang,
-        "page": page,
-        "source_name": source_name,
-    })
-    request_body: dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "maxTokens": max_tokens,
-        "metadata": {
-            "role_id": role_id,
-            "role_name": role_name,
+    chat_url = f"{MODEL_AGGREGATOR_BASE_URL}/api/aggregate/chat"
+    chunks = split_model_translation_text(text)
+    progress = payload.get("_progress")
+    if callable(progress):
+        progress(0, len(chunks))
+    translations: list[str] = []
+    fallback_used = False
+    for chunk_index, chunk in enumerate(chunks, start=1):
+        user_prompt = render_prompt_template(user_prompt_template, {
+            "source_text": chunk,
             "source_lang": source_lang,
             "target_lang": target_lang,
             "page": page,
             "source_name": source_name,
-        },
-    }
+        })
+        request_body: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "maxTokens": max_tokens,
+            "metadata": {
+                "role_id": role_id,
+                "role_name": role_name,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+                "page": page,
+                "source_name": source_name,
+            },
+        }
+        try:
+            timeout = min(15, MODEL_AGGREGATOR_TIMEOUT_SECONDS) if model == "gemini:gemini-3.8-flash" else MODEL_AGGREGATOR_TIMEOUT_SECONDS
+            raw = request_json("POST", chat_url, request_body, timeout=timeout)
+            if raw.get("ok") is False:
+                raise RuntimeError(raw.get("error") or raw.get("message") or "ModelAggregatorService returned ok=false")
+        except (RuntimeError, TimeoutError) as exc:
+            reason = str(exc).lower()
+            if model != "gemini:gemini-3.8-flash" or not any(
+                marker in reason for marker in ("503", "high demand", "timed out", "timeout")
+            ):
+                raise
+            model = "gemini:gemini-3.6-flash"
+            fallback_used = True
+            request_body["model"] = model
+            raw = request_json("POST", chat_url, request_body, timeout=MODEL_AGGREGATOR_TIMEOUT_SECONDS)
+            if raw.get("ok") is False:
+                raise RuntimeError(raw.get("error") or raw.get("message") or "ModelAggregatorService returned ok=false")
 
-    chat_url = f"{MODEL_AGGREGATOR_BASE_URL}/api/aggregate/chat"
-    raw = request_json("POST", chat_url, request_body, timeout=MODEL_AGGREGATOR_TIMEOUT_SECONDS)
-    if raw.get("ok") is False:
-        raise RuntimeError(raw.get("error") or raw.get("message") or "ModelAggregatorService returned ok=false")
+        translation = extract_model_aggregator_translation(raw).strip()
+        if not translation:
+            raise RuntimeError("翻译模型返回空译文，请稍后重试或切换模型")
+        translations.append(translation)
+        if callable(progress):
+            progress(chunk_index, len(chunks))
 
-    translation = extract_model_aggregator_translation(raw)
+    translation = "\n\n".join(translations)
     return {
         "translation": translation,
         "translated_text": translation,
         "text": translation,
         "provider": TRANSLATE_PROVIDER,
         "model": raw.get("model") or model,
+        "requested_model": requested_model,
+        "fallback_used": fallback_used,
+        "chunk_count": len(chunks),
         "role_id": role_id,
         "role_name": role_name,
-        "raw": raw,
     }
 
 
