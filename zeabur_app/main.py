@@ -457,7 +457,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
         raise HTTPException(404, "PDF 源文件不存在")
     if page_num < 1:
         raise HTTPException(400, "页码必须大于零")
-    safe_dpi = min(240, max(72, dpi))
+    safe_dpi = min(360, max(72, dpi))
     try:
         import fitz
 
@@ -476,6 +476,48 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144) -> Respon
         logging.warning("Remote PDF preview failed for book %s page %s: %s", book_id, page_num, type(exc).__name__)
         raise HTTPException(502, "云端 PDF 单页预览失败，请稍后重试") from exc
     return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+def remote_pdf_metadata(book_id: str) -> dict[str, Any]:
+    metadata = read_json(book_id, "metadata.json")
+    if not metadata.get("source_key") or not str(metadata.get("name") or "").lower().endswith(".pdf"):
+        raise HTTPException(404, "PDF 源文件不存在")
+    return metadata
+
+
+@app.get("/api/books/{book_id}/document-info")
+def get_book_document_info(book_id: str) -> dict[str, Any]:
+    metadata = remote_pdf_metadata(book_id)
+    try:
+        import fitz
+
+        with fitz.open(stream=cached_pdf_source(str(metadata["source_key"]), int(metadata.get("size") or 0)), filetype="pdf") as document:
+            return {"page_count": document.page_count, "name": metadata.get("name") or "", "size": metadata.get("size") or 0}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.warning("Remote PDF info failed for book %s: %s", book_id, type(exc).__name__)
+        raise HTTPException(502, "云端 PDF 页数读取失败，请稍后重试") from exc
+
+
+@app.get("/api/books/{book_id}/pages/{page_num}/text")
+def get_book_page_text(book_id: str, page_num: int) -> dict[str, Any]:
+    metadata = remote_pdf_metadata(book_id)
+    if page_num < 1:
+        raise HTTPException(400, "页码必须大于零")
+    try:
+        import fitz
+
+        with fitz.open(stream=cached_pdf_source(str(metadata["source_key"]), int(metadata.get("size") or 0)), filetype="pdf") as document:
+            if page_num > document.page_count:
+                raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
+            text = document.load_page(page_num - 1).get_text("text", sort=True).strip()
+            return {"page": page_num, "text": text, "lines": [line.strip() for line in text.splitlines() if line.strip()]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.warning("Remote PDF text failed for book %s page %s: %s", book_id, page_num, type(exc).__name__)
+        raise HTTPException(502, "云端 PDF 文本层读取失败，请稍后重试") from exc
 
 
 @app.put("/api/books/{book_id}/state")

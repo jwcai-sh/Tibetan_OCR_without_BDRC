@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import oss2
+import fitz
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from zeabur_app import main
@@ -93,6 +95,35 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(response.content, b"%PDF-")
         self.assertEqual(response.headers["content-range"], "bytes 0-4/9")
         self.assertEqual(response.headers["accept-ranges"], "bytes")
+
+    def test_mobile_pdf_pages_and_text_use_existing_collaboration_auth(self):
+        document = fitz.open()
+        document.new_page().insert_text((72, 72), "First page")
+        document.new_page().insert_text((72, 72), "Second page")
+        self.bucket.objects["待识别文档/经书/第一册.pdf"] = document.tobytes()
+        document.close()
+        book = self.client.post(
+            "/api/library/open", headers={"Authorization": "Bearer test-library-password"},
+            json={"path": "经书/第一册.pdf"},
+        ).json()
+        book_id = book["book_id"]
+        with patch.object(main.collaboration, "configured", return_value=True), patch.object(
+            main.collaboration, "current_actor", side_effect=HTTPException(401, "请登录协作")
+        ):
+            self.assertEqual(self.client.get(f"/api/books/{book_id}/document-info").status_code, 401)
+            self.assertEqual(self.client.get(f"/api/books/{book_id}/pages/2/text").status_code, 401)
+        with patch.object(main.collaboration, "configured", return_value=True), patch.object(
+            main.collaboration, "current_actor", return_value="msh"
+        ):
+            info = self.client.get(f"/api/books/{book_id}/document-info")
+            text = self.client.get(f"/api/books/{book_id}/pages/2/text")
+            preview = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=260")
+            out_of_range = self.client.get(f"/api/books/{book_id}/pages/3/text")
+        self.assertEqual(info.json()["page_count"], 2)
+        self.assertEqual(text.json()["text"], "Second page")
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.headers["content-type"], "image/png")
+        self.assertEqual(out_of_range.status_code, 400)
 
     def test_open_rejects_unauthorized_and_path_traversal(self):
         self.assertEqual(self.client.post("/api/library/open", json={"path": "经书/第一册.pdf"}).status_code, 401)

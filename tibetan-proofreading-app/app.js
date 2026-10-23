@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261013-collaboration-rds-v1";
+const APP_BUILD_ID = "20261023-iphone-cloud-pages-v1";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -167,6 +167,9 @@ let proofreadFloatingMarkButton = null;
 let lastProofreadSelectionPoint = null;
 const state = {
   pdfDoc: null,
+  remoteServerPdf: false,
+  remoteFirstPageDeadline: 0,
+  remoteRestoreComplete: false,
   pdfUrl: "",
   pdfFile: null,
   pdfPageRenderUrl: "",
@@ -220,7 +223,7 @@ const cloudLibrary = {
   token: "",
   accessToken: "",
   apiBaseUrl: "",
-  authMode: "legacy",
+  authMode: "unknown",
   actor: "",
   names: [],
   items: [],
@@ -229,6 +232,7 @@ const cloudLibrary = {
   loading: false,
   uploading: false,
   pendingResume: null,
+  bootAttempted: false,
 };
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -247,7 +251,9 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshControls();
   updateSummary();
   updateTranslationSummary();
-  void cloudLibraryReady.then(() => restoreRouteFromLocation());
+  void cloudLibraryReady.then(() => {
+    if (cloudLibrary.authMode !== "unknown") restoreRouteFromLocation();
+  });
   window.addEventListener("popstate", restoreRouteFromLocation);
   warnIfFileProtocol();
   if (window.lucide) {
@@ -277,13 +283,14 @@ function cacheElements() {
     "cloudLibraryAuthTitle", "cloudLibraryAuthHint",
     "cloudLibraryPassword",
     "collaboratorName",
-    "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout",
+    "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout", "collaborationRetryButton",
     "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabLogout", "collabFeedback",
     "cloudLibraryUnlockButton",
     "cloudLibraryStatus",
     "cloudLibraryFiles",
     "cloudLibraryBreadcrumb",
     "cloudLibraryRows",
+    "sourceRetryButton",
     "fileLoadButton",
     "newProjectButton",
     "deleteProjectButton",
@@ -419,7 +426,20 @@ function wireEvents() {
   bindOptionalClick("homeBrowseTranslationProjectsButton", () => browseHomeProjects("translation"));
   bindOptionalClick("homeContinueTranslationTaskButton", () => continueHomeTask("translation"));
   bindOptionalClick("homeRefreshProjectsButton", () => renderHomeDashboard());
-  bindOptionalClick("cloudLibraryRefreshButton", () => void refreshCloudLibrary());
+  bindOptionalClick("cloudLibraryRefreshButton", () => void (cloudLibrary.authMode === "unknown" ? initializeCloudLibrary() : refreshCloudLibrary()));
+  bindOptionalClick("collaborationRetryButton", () => void initializeCloudLibrary());
+  bindOptionalClick("sourceRetryButton", () => {
+    els.sourceRetryButton.hidden = true;
+    if (state.remoteBookId && !state.remoteRestoreComplete) {
+      void resumeRemoteProject({
+        sourceName: state.sourceName, sourceSize: state.sourceSize, sourceMime: state.sourceMime,
+        remoteBookId: state.remoteBookId,
+      }, state.activeWorkflow);
+    } else if (state.pageCount) {
+      state.remoteFirstPageDeadline = Date.now() + 120000;
+      void renderCurrentPage().catch(() => {});
+    }
+  });
   bindOptionalClick("cloudLibraryUploadButton", () => els.cloudLibraryUploadInput?.click());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
   els.cloudLibraryUploadInput?.addEventListener("change", (event) => {
@@ -1218,6 +1238,10 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     const apiHeaders = project.apiAccessToken ? { Authorization: `Bearer ${project.apiAccessToken}` } : {};
     const sourceUrl = `${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/source?v=${Date.now()}`;
     const sourcePromise = (async () => {
+      if (isCloudDeployment() && window.matchMedia("(max-width: 760px)").matches &&
+          isPdfFile({ name: project.sourceName, type: project.sourceMime })) {
+        return { rangePdf: true, name: project.sourceName, type: project.sourceMime || "application/pdf", size: Number(project.sourceSize) || 0 };
+      }
       let sourceName = project.sourceName || "";
       let sourceMime = project.sourceMime || "";
       let sourceSize = Number(project.sourceSize) || 0;
@@ -1346,6 +1370,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     });
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
+    state.remoteRestoreComplete = true;
     if (pendingPages.length && !remoteState.collaboration_degraded) {
       setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
     } else {
@@ -1362,7 +1387,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       return;
     }
     if (!state.pageCount || els.emptyState.style.display !== "none") {
-      els.emptyState.textContent = "云端 PDF 首页载入失败，请返回主页重新打开该书。";
+      els.emptyState.style.display = "grid";
+      els.emptyState.textContent = `云端 PDF 首页载入失败：${error.name === "AbortError" ? "请求超时" : error.message || error}。请点下方按钮重试。`;
+      if (els.sourceRetryButton) els.sourceRetryButton.hidden = false;
     }
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
   }
@@ -1458,7 +1485,40 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
   els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
+  if (isCloudDeployment() && window.matchMedia("(max-width: 760px)").matches) {
+    return loadRemotePdfWithServerPages(remoteBookId, requestId);
+  }
   return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId, httpHeaders });
+}
+
+async function loadRemotePdfWithServerPages(bookId, requestId) {
+  state.remoteServerPdf = true;
+  state.remoteFirstPageDeadline = Date.now() + 120000;
+  state.sourceType = "pdf";
+  const response = await fetchWithCloudTimeout(
+    `${window.location.origin}/api/books/${encodeURIComponent(bookId)}/document-info`,
+    { credentials: "same-origin" }, 120000,
+  );
+  const info = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(info.detail || `云端 PDF 页数 HTTP ${response.status}`), { status: response.status });
+  if (requestId !== state.documentRequestId) return false;
+  if (!Number.isInteger(info.page_count) || info.page_count < 1) throw new Error("云端 PDF 没有可显示的页面");
+  state.pageNum = 1;
+  state.pageCount = info.page_count;
+  els.ocrTitle.textContent = "第 1 页 OCR";
+  restoreCachedResults();
+  refreshControls();
+  setStatus(`已读取 ${state.pageCount} 页，正在生成首页原文…`, "warn");
+  await renderCurrentPage();
+  if (requestId !== state.documentRequestId) return false;
+  state.remoteFirstPageDeadline = 0;
+  scheduleIdleWork(() => {
+    if (requestId === state.documentRequestId) {
+      void primeCurrentPageDirectText();
+      buildPdfThumbnails();
+    }
+  });
+  return true;
 }
 
 async function findCachedRemoteSource(project) {
@@ -1477,10 +1537,22 @@ async function findCachedRemoteSource(project) {
 
 async function initializeCloudLibrary() {
   if (!els.cloudLibrary) return;
+  const retryAfterFailedBoot = cloudLibrary.bootAttempted && cloudLibrary.authMode === "unknown";
+  cloudLibrary.bootAttempted = true;
   els.cloudLibrary.hidden = false;
   cloudLibrary.apiBaseUrl = cloudLibraryApiOrigin();
+  if (els.collaborationRetryButton) els.collaborationRetryButton.hidden = true;
+  if (isCloudDeployment()) {
+    els.collaborationLoginBar.hidden = false;
+    els.collaborationActorLabel.textContent = "正在连接协作服务…";
+  }
+  els.cloudLibraryAuth.hidden = false;
+  els.cloudLibraryAuthTitle.textContent = "正在连接阿里云 OSS";
+  els.cloudLibraryAuthHint.textContent = "请稍候，正在检查协作者登录状态。";
+  setCloudLibraryStatus("正在连接云端目录…");
   try {
-    const response = await fetch(`${cloudLibrary.apiBaseUrl}/api/collaboration/config`);
+    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl}/api/collaboration/config`, {}, 15000);
+    if (!response.ok) throw new Error(`协作配置 HTTP ${response.status}`);
     const config = await response.json();
     cloudLibrary.authMode = config.enabled ? "collaboration" : "legacy";
     cloudLibrary.names = Array.isArray(config.names) ? config.names : [];
@@ -1499,11 +1571,12 @@ async function initializeCloudLibrary() {
         try { cloudLibrary.accessToken = window.sessionStorage.getItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.accessToken = ""; }
       }
       const meHeaders = cloudLibrary.accessToken ? { Authorization: `Bearer ${cloudLibrary.accessToken}` } : {};
-      const meResponse = await fetch(`${cloudLibrary.apiBaseUrl}/api/collaboration/me`, {
+      const meResponse = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl}/api/collaboration/me`, {
         credentials: isCloudDeployment() ? "same-origin" : "omit",
         headers: meHeaders,
-      });
+      }, 15000);
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
+      else if (meResponse.status !== 401) throw new Error(`协作者状态 HTTP ${meResponse.status}`);
       else if (isLocalWorkbench() && cloudLibrary.accessToken) {
         cloudLibrary.accessToken = "";
         try { window.sessionStorage.removeItem(LOCAL_CLOUD_LIBRARY_SESSION_KEY); } catch (_) { /* Ignore storage restrictions. */ }
@@ -1511,8 +1584,21 @@ async function initializeCloudLibrary() {
     } else {
       try { cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.token = ""; }
     }
-  } catch (_) {
-    try { cloudLibrary.token = window.sessionStorage.getItem(CLOUD_LIBRARY_SESSION_KEY) || ""; } catch (_) { cloudLibrary.token = ""; }
+  } catch (error) {
+    cloudLibrary.authMode = "unknown";
+    els.cloudLibraryAuthTitle.textContent = "协作服务连接失败";
+    els.cloudLibraryAuthHint.textContent = "点“刷新”或“重试连接”后继续使用云端目录。";
+    els.collaborationActorLabel.textContent = "协作服务连接失败";
+    if (els.collaborationRetryButton) els.collaborationRetryButton.hidden = !isCloudDeployment();
+    setCloudLibraryStatus(`连接失败：${error.name === "AbortError" ? "请求超时" : error.message || error}`, true);
+    return;
+  }
+  els.cloudLibraryPassword.hidden = cloudLibrary.authMode === "collaboration" && !cloudLibrary.passwordRequired;
+  els.cloudLibraryUnlockButton.hidden = false;
+  els.cloudLibraryUnlockButton.textContent = cloudLibrary.authMode === "collaboration" ? "登录协作" : "解锁";
+  if (cloudLibrary.authMode === "legacy") {
+    els.cloudLibraryAuthTitle.textContent = "云端目录已保护";
+    els.cloudLibraryAuthHint.textContent = "输入文档访问口令后，查看私有 OSS 文件。";
   }
   els.cloudLibraryAuth.hidden = cloudLibrary.authMode === "collaboration" ? Boolean(cloudLibrary.actor) : Boolean(cloudLibrary.token);
   els.cloudLibraryFiles.hidden = true;
@@ -1531,7 +1617,15 @@ async function initializeCloudLibrary() {
     if (els.cloudLibraryAuthHint) els.cloudLibraryAuthHint.textContent = "使用 Zeabur 协作者账号登录后，可从本地工作台浏览和打开云端文件。";
   }
   if (els.cloudLibraryUploadButton) els.cloudLibraryUploadButton.hidden = !cloudLibrary.actor && !cloudLibrary.token;
-  if (cloudLibrary.actor) void refreshCloudLibrary();
+  setCloudLibraryStatus("");
+  if (cloudLibrary.actor || cloudLibrary.token) void refreshCloudLibrary();
+  if (retryAfterFailedBoot) void restoreRouteFromLocation();
+}
+
+async function fetchWithCloudTimeout(url, options = {}, timeoutMs = 120000) {
+  const controller = new AbortController();
+  window.setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  return fetch(url, { ...options, signal: controller.signal });
 }
 
 async function unlockCloudLibrary() {
@@ -1583,6 +1677,7 @@ function setCloudLibraryStatus(message, isError = false) {
 
 async function refreshCloudLibrary() {
   if (cloudLibrary.loading) return;
+  if (cloudLibrary.authMode === "unknown") return initializeCloudLibrary();
   if (!cloudLibrary.token && !(cloudLibrary.authMode === "collaboration" && cloudLibrary.actor)) {
     els.cloudLibraryAuth.hidden = false;
     els.cloudLibraryFiles.hidden = true;
@@ -1593,9 +1688,9 @@ async function refreshCloudLibrary() {
   try {
     const headers = cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {};
     if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
-    const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library`, {
+    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library`, {
       credentials: isCloudDeployment() ? "same-origin" : "omit", headers,
-    });
+    }, 30000);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(payload.detail || `HTTP ${response.status}`), { status: response.status });
     cloudLibrary.items = Array.isArray(payload.items) ? payload.items.filter((item) => typeof item.path === "string") : [];
@@ -1624,7 +1719,7 @@ async function refreshCloudLibrary() {
         els.collabHeaderName.hidden = false; els.collabHeaderPassword.hidden = !cloudLibrary.passwordRequired; els.collabHeaderLogin.hidden = false; els.collabHeaderLogout.hidden = true;
       }
     }
-    setCloudLibraryStatus(`云端目录读取失败：${error.message || error}`, true);
+    setCloudLibraryStatus(`云端目录读取失败：${error.name === "AbortError" ? "请求超时，请点刷新重试" : error.message || error}`, true);
   } finally {
     cloudLibrary.loading = false;
   }
@@ -2946,6 +3041,10 @@ function resetDocumentState() {
   }
 
   state.pdfDoc = null;
+  state.remoteServerPdf = false;
+  state.remoteFirstPageDeadline = 0;
+  state.remoteRestoreComplete = false;
+  if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
   state.pdfUrl = "";
   state.pdfFile = null;
   state.pdfPageRenderUrl = "";
@@ -3611,13 +3710,15 @@ async function renderCurrentPage() {
 
   const token = ++state.renderToken;
   try {
-    if (isCloudDeployment() && state.remoteBookId && window.matchMedia("(max-width: 760px)").matches) {
+    if (state.remoteServerPdf || (isCloudDeployment() && state.remoteBookId && window.matchMedia("(max-width: 760px)").matches)) {
       if (await renderCurrentPdfPageWithLocalService(token)) {
+        if (state.remoteServerPdf) state.remoteFirstPageDeadline = 0;
         syncPageControls(true);
         renderActiveSourceHighlight();
         updateOcrPanelForPage();
         updateTranslationPanelForPage();
         updateThumbnailState();
+        deferCurrentPageSourceHydration(state.pageNum, token);
         return;
       }
     }
@@ -3658,6 +3759,15 @@ async function renderCurrentPage() {
     deferCurrentPageSourceHydration(state.pageNum, token);
   } catch (error) {
     if (token !== state.renderToken) return;
+    if (state.remoteServerPdf) {
+      els.pdfCanvas.style.display = "none";
+      els.imagePage.style.display = "none";
+      els.emptyState.style.display = "grid";
+      els.emptyState.textContent = `第 ${state.pageNum} 页加载失败：${error.name === "AbortError" ? "请求超时" : error.message || error}。请点下方按钮重试。`;
+      if (els.sourceRetryButton) els.sourceRetryButton.hidden = false;
+      setStatus(`原文页加载失败：${error.name === "AbortError" ? "请求超时" : error.message || error}`, "error");
+      throw error;
+    }
     console.warn("Browser PDF render unavailable, falling back to server", error);
     if (!await renderCurrentPdfPageWithLocalService(token)) throw error;
     syncPageControls(true);
@@ -3698,10 +3808,12 @@ async function renderCurrentPdfPageWithLocalService(token) {
     els.imagePage.style.display = "block";
     els.pdfCanvas.style.display = "none";
     els.emptyState.style.display = "none";
+    if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
     applySourcePageZoom();
     return true;
   } catch (error) {
     console.warn("Local Poppler PDF render unavailable, falling back to PDF.js", error);
+    if (state.remoteServerPdf) throw error;
     return false;
   }
 }
@@ -3740,9 +3852,11 @@ function getBatchPdfRenderDpi(width, height, requestedDpi) {
 
 async function renderPdfPageBlobWithLocalService(pageNum, dpi) {
   if (!state.pdfFile && isCloudDeployment() && state.remoteBookId) {
-    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}`, {
+    const timeoutMs = state.remoteFirstPageDeadline
+      ? Math.max(1, state.remoteFirstPageDeadline - Date.now()) : 120000;
+    const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}`, {
       credentials: "same-origin",
-    });
+    }, timeoutMs);
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.detail || `云端单页预览 HTTP ${response.status}`);
@@ -3810,7 +3924,7 @@ async function buildPdfThumbnails() {
   let nextPage = 1;
 
   const appendChunk = (deadline) => {
-    if (!state.pdfDoc || token !== state.thumbnailToken) return;
+    if ((!state.pdfDoc && !state.remoteServerPdf) || token !== state.thumbnailToken) return;
 
     const fragment = document.createDocumentFragment();
     let appended = 0;
@@ -3894,7 +4008,16 @@ async function goToPage(pageNum, options = {}) {
   state.pageNum = nextPage;
   updateCollaborationPageNumber();
   clearSourceLineHighlight();
-  await renderCurrentPage();
+  try {
+    await renderCurrentPage();
+  } catch (error) {
+    if (!state.remoteServerPdf) throw error;
+    updateOcrPanelForPage();
+    updateTranslationPanelForPage();
+    updateThumbnailState();
+    refreshControls();
+    return;
+  }
   scheduleIdleWork(() => primeCurrentPageDirectText("page"));
   refreshControls();
 }
@@ -4688,6 +4811,24 @@ function buildAiOcrPrompt(bdrcText, profileId = state.ocrProfile) {
 }
 
 async function extractCurrentPdfPageText() {
+  if (state.remoteServerPdf && state.remoteBookId) {
+    const bookId = state.remoteBookId;
+    const pageNum = state.pageNum;
+    const response = await fetchWithCloudTimeout(
+      `${window.location.origin}/api/books/${encodeURIComponent(bookId)}/pages/${pageNum}/text`,
+      { credentials: "same-origin" }, 30000,
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (bookId !== state.remoteBookId || pageNum !== state.pageNum) throw new Error("页面已切换，丢弃过期的 PDF 文本层结果");
+    if (!response.ok) throw new Error(payload.detail || `PDF 文本层 HTTP ${response.status}`);
+    const text = String(payload.text || "").trim();
+    return {
+      text,
+      raw: { source: "pdf-text", page: pageNum },
+      lines: (Array.isArray(payload.lines) ? payload.lines : text.split("\n"))
+        .filter(Boolean).map((line, index) => ({ text: line, bbox: null, index })),
+    };
+  }
   if (!state.pdfDoc) return { text: "", raw: null, lines: [] };
   const page = await state.pdfDoc.getPage(state.pageNum);
   const content = await page.getTextContent();
@@ -4729,6 +4870,9 @@ async function primeCurrentPageDirectText(mode = "silent") {
 
 async function ensureCurrentPageDirectText(options = {}) {
   const { overwrite = false, updatePanel = false } = options;
+  const targetPage = state.pageNum;
+  const targetBookId = state.remoteBookId;
+  const targetCacheKey = state.cacheKey;
   const existing = state.ocrResults.get(state.pageNum);
   const existingText = (existing?.text || "").trim();
 
@@ -4787,6 +4931,11 @@ async function ensureCurrentPageDirectText(options = {}) {
   }
 
   const pdfTextResult = await extractCurrentPdfPageText();
+  if (targetPage !== state.pageNum || targetBookId !== state.remoteBookId || targetCacheKey !== state.cacheKey ||
+      state.ocrResults.get(targetPage) !== existing ||
+      (state.ocrResults.get(targetPage)?.text || "").trim() !== existingText) {
+    return { text: "", source: "pdf-text", label: "PDF 文本层", persisted: false, stale: true };
+  }
   if (!pdfTextResult.text) {
     return { text: "", source: "pdf-text", label: "PDF 文本层", persisted: false };
   }
@@ -5584,6 +5733,10 @@ async function getCurrentPageImageBlob() {
     return state.imageBlob;
   }
 
+  if (state.remoteServerPdf && state.remoteBookId) {
+    return getRenderedPdfPageBlobWithCache(state.pageNum, Number(els.dpiInput.value) || 260);
+  }
+
   if (state.pdfFile) {
     try {
       return await getRenderedPdfPageBlobWithCache(state.pageNum, Number(els.dpiInput.value) || 260);
@@ -5614,6 +5767,9 @@ async function getCurrentPageImageBlob() {
 
 async function getSourcePreviewPageBlob(pageNum) {
   if (state.sourceType === "image") return state.imageBlob;
+  if (state.remoteServerPdf && state.remoteBookId) {
+    return getRenderedPdfPageBlobWithCache(pageNum, Number(els.dpiInput.value) || 260);
+  }
   const pdfDoc = state.pdfDoc;
   if (!pdfDoc) return getCurrentPageImageBlob();
 

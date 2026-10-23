@@ -1349,6 +1349,14 @@ body.is-resizing-panes * {
   height: 38px;
 }
 
+.source-retry-button {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+}
+
 .markdown-source-preview {
   width: min(88%, 720px);
   max-height: min(56vh, 620px);
