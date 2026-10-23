@@ -1325,7 +1325,12 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         requestCollaborationLogin(project, workflow);
         return;
       }
-      setStatus(`已打开“${sourceName}”原文；云端校对状态暂时无法加载（${error.message || error}）。本地已有结果仍保留，修改暂时无法确认是否已同步。`, "warn");
+      if (els.sourceRetryButton) {
+        els.sourceRetryButton.textContent = "重试云端校对状态";
+        els.sourceRetryButton.hidden = false;
+      }
+      setCollaborationFeedback("云端校对状态暂时无法加载；本机修改会保留，重试成功前不会写入云端。", true);
+      setStatus(`已打开“${sourceName}”原文；云端校对状态暂时无法加载（${error.message || error}）。本机修改暂不上传，请点“重试云端校对状态”。`, "warn");
       updateCollaborationPageNumber();
       return;
     }
@@ -1388,6 +1393,11 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
     state.remoteRestoreComplete = true;
+    if (els.sourceRetryButton) {
+      els.sourceRetryButton.hidden = true;
+      els.sourceRetryButton.textContent = "重试加载当前页";
+    }
+    setCollaborationFeedback("");
     if (pendingPages.length && !remoteState.collaboration_degraded) {
       setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
     } else {
@@ -1501,6 +1511,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
   state.remoteBookId = remoteBookId;
   els.sourceTitle.textContent = state.sourceName;
   els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
+  if (els.sourceRetryButton) els.sourceRetryButton.textContent = "重试加载当前页";
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
   if (isCloudDeployment()) {
@@ -3262,13 +3273,14 @@ async function createRemoteBook(file, requestId = state.documentRequestId) {
   state.remotePageRevisions = {};
   state.remotePageSnapshots = {};
   state.remoteDeferredPages = new Set();
+  state.remoteRestoreComplete = true;
   const url = new URL(window.location.href);
   url.searchParams.set("book_id", state.remoteBookId);
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function scheduleRemoteStateSave(payload, immediate = false) {
-  if (!isCloudDeployment() || !state.remoteBookId || state.remoteRestoreInFlight) return;
+  if (!isCloudDeployment() || !state.remoteBookId || state.remoteRestoreInFlight || !state.remoteRestoreComplete) return;
   if (state.remoteSaveTimer) window.clearTimeout(state.remoteSaveTimer);
   const bookId = state.remoteBookId;
   const save = async () => {
