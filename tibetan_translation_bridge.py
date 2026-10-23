@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -13,6 +14,9 @@ def _load_translation_module() -> Any:
         raise RuntimeError("无法加载藏译汉服务")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Zeabur's API health route defaults to the aggregator provider; keep the
+    # dynamically loaded translation module on that same production default.
+    module.TRANSLATE_PROVIDER = os.environ.get("TRANSLATE_PROVIDER", "").strip() or "model_aggregator"
     return module
 
 
