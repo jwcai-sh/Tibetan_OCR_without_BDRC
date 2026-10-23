@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261023-iphone-cloud-pages-v1";
+const APP_BUILD_ID = "20261023-iphone-cloud-pages-v2";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -259,6 +259,8 @@ window.addEventListener("DOMContentLoaded", () => {
   if (window.lucide) {
     window.lucide.createIcons();
   }
+  window.__tibetanWorkbenchBootReady = true;
+  if (els.collaborationRetryButton) els.collaborationRetryButton.onclick = null;
 });
 
 function cacheElements() {

@@ -10,7 +10,25 @@
     <link rel="stylesheet" href="./styles.css?v=20261023-iphone-cloud-pages-v1" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261023-iphone-cloud-pages-v1" defer></script>
+    <script>
+      window.__tibetanWorkbenchBootReady = false;
+      window.__tibetanWorkbenchBootFailure = function () {
+        if (window.__tibetanWorkbenchBootReady) return;
+        const actor = document.getElementById("collaborationActorLabel");
+        const title = document.getElementById("cloudLibraryAuthTitle");
+        const hint = document.getElementById("cloudLibraryAuthHint");
+        const retry = document.getElementById("collaborationRetryButton");
+        if (actor) actor.textContent = "页面加载失败，请重试连接";
+        if (title) title.textContent = "云端目录暂不可用";
+        if (hint) hint.textContent = "请检查网络后点击“重试连接”。";
+        if (retry) {
+          retry.hidden = false;
+          retry.onclick = function () { window.location.reload(); };
+        }
+      };
+      window.setTimeout(window.__tibetanWorkbenchBootFailure, 30000);
+    </script>
+    <script src="./app.js?v=20261023-iphone-cloud-pages-v2" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
