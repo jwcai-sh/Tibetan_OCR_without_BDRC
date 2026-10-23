@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261023-iphone-cloud-pages-v2";
+const APP_BUILD_ID = "20261023-cloud-pages-v3";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -1488,7 +1488,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
   els.emptyState.textContent = `正在读取“${state.sourceName}”首页，请稍候…`;
   window.localStorage.setItem(ACTIVE_PROJECT_KEY, state.cacheKey);
   setStatus(`正在载入“${state.sourceName}”首页...`, "warn");
-  if (isCloudDeployment() && window.matchMedia("(max-width: 760px)").matches) {
+  if (isCloudDeployment()) {
     return loadRemotePdfWithServerPages(remoteBookId, requestId);
   }
   return loadPdf(null, { sourceUrl, useRangeRequests: true, requestId, httpHeaders });
