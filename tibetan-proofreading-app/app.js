@@ -1460,6 +1460,7 @@ function mergeNewerLocalCloudState(cloudCache, localRaw, bookId) {
 
 function requestCollaborationLogin(project, workflow) {
   cloudLibrary.pendingResume = { project, workflow };
+  if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
   cloudLibrary.actor = "";
   cloudLibrary.loaded = false;
   els.collaborationActorLabel.textContent = "";
@@ -3859,7 +3860,7 @@ async function renderPdfPageBlobWithLocalService(pageNum, dpi) {
     }, timeoutMs);
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.detail || `云端单页预览 HTTP ${response.status}`);
+      throw Object.assign(new Error(payload.detail || `云端单页预览 HTTP ${response.status}`), { status: response.status });
     }
     return response.blob();
   }
