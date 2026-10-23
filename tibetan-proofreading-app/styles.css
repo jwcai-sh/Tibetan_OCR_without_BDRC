@@ -2886,6 +2886,14 @@ body.is-resizing-panes * {
     gap: 10px;
   }
 
+  .app-shell.home-mode .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .brand {
     gap: 9px;
   }
@@ -2903,6 +2911,17 @@ body.is-resizing-panes * {
   .project-actions {
     flex-wrap: wrap;
     gap: 6px;
+  }
+
+  .app-shell.home-mode .project-actions {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .app-shell.home-mode .collaboration-login-bar {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .project-actions .compact {
