@@ -6552,7 +6552,9 @@ function makeProofreadModelToggle(index, provider, content) {
     content.hidden = collapsed;
     button.setAttribute("aria-expanded", String(!collapsed));
     button.setAttribute("aria-label", `${collapsed ? "展开" : "折叠"}${proofreadModelName(provider)}识别结果`);
-    button.textContent = collapsed ? "展开" : "折叠";
+    button.title = `${collapsed ? "展开" : "折叠"}${proofreadModelName(provider)}识别结果`;
+    button.innerHTML = `<i data-lucide="${collapsed ? "chevrons-down" : "chevrons-up"}"></i>`;
+    if (window.lucide) window.lucide.createIcons({root: button});
   };
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -6592,7 +6594,7 @@ function decorateProofreadModelSection(group, index, provider, card, sourceLine,
   }
   const actions = renderSharedErrorActionGroup(index, card, provider);
   appendProofreadErrorActionsAfterModelSelector(controls, actions, controls ? null : header);
-  header.append(makeProofreadModelToggle(index, provider, content));
+  header.prepend(makeProofreadModelToggle(index, provider, content));
   group.classList.add("proofread-model-section");
   return group;
 }
@@ -6607,7 +6609,8 @@ function decorateIndependentProofreadModelSection(group, index, provider, card) 
   content.className = "proofread-model-content proofread-independent-content";
   while (group.firstChild) content.appendChild(group.firstChild);
   appendProofreadErrorActionsAfterModelSelector(controls, renderSharedErrorActionGroup(index, card, provider));
-  header.append(title, controls, makeProofreadModelToggle(index, provider, content));
+  header.append(title, controls);
+  header.prepend(makeProofreadModelToggle(index, provider, content));
   group.classList.add("proofread-model-section", `is-${provider}`);
   group.replaceChildren(header, content);
   return group;

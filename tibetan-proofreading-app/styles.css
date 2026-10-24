@@ -2047,7 +2047,8 @@ body.is-resizing-panes * {
   border-left: 0;
   border-right: 1px solid #f7c8c1;
 }
-.proofread-model-toggle { flex: 0 0 auto; min-height: 30px; margin-left: auto; }
+.proofread-model-toggle { width: 30px; min-width: 30px; flex: 0 0 auto; min-height: 30px; margin-left: 0; padding: 0; gap: 0; }
+.proofread-model-toggle .lucide { width: 16px; height: 16px; }
 .proofread-model-section.is-qwen,
 .proofread-model-section.is-openai {
   width: 100%;

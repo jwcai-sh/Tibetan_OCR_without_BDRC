@@ -38,13 +38,21 @@ test('each model has an independent collapse control that survives rerender', ()
     const bdrc = {hidden:false}; const gemini = {hidden:false};
     const bdrcButton = makeProofreadModelToggle(0, 'bdrc', bdrc);
     const geminiButton = makeProofreadModelToggle(0, 'llm', gemini);
+    const expandedIcon = geminiButton.innerHTML;
     bdrcButton.handlers.click({stopPropagation(){}});
+    geminiButton.handlers.click({stopPropagation(){}});
     const reopened = {hidden:false};
     makeProofreadModelToggle(0, 'bdrc', reopened);
     return {bdrc:bdrc.hidden,gemini:gemini.hidden,reopened:reopened.hidden,
-      expanded:bdrcButton['aria-expanded']};
+      expanded:bdrcButton['aria-expanded'], expandedIcon,
+      collapsedIcon:geminiButton.innerHTML, collapsedLabel:geminiButton['aria-label']};
   })()`, ctx);
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), {bdrc:true,gemini:false,reopened:true,expanded:'false'});
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    bdrc:true,gemini:true,reopened:true,expanded:'false',
+    expandedIcon:'<i data-lucide="chevrons-up"></i>',
+    collapsedIcon:'<i data-lucide="chevrons-down"></i>',
+    collapsedLabel:'展开Gemini识别结果',
+  });
 });
 
 test('clear-error action is labeled 撤销 and follows the model selector', () => {
@@ -83,9 +91,13 @@ test('error actions remain available in headings without a model selector', () =
   assert.deepEqual(JSON.parse(JSON.stringify(result)), ['heading', 'undo and mark', 'metadata']);
 });
 
-test('model collapse controls align to the right edge of every section header', () => {
+test('model collapse controls lead each section header and use icon-only left aligned styling', () => {
   const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.proofread-model-toggle\s*\{[^}]*margin-left:\s*auto/s);
+  const app = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+  assert.equal((app.match(/header\.prepend\(makeProofreadModelToggle\(/g) || []).length, 2);
+  assert.match(css, /\.proofread-model-toggle\s*\{[^}]*margin-left:\s*0/s);
+  assert.match(css, /\.proofread-model-toggle\s*\{[^}]*width:\s*30px/s);
+  assert.match(css, /\.proofread-model-toggle\s+\.lucide\s*\{[^}]*width:\s*16px/s);
   assert.match(css, /\.proofread-model-section\s+\.proofread-inline-action-group\s*\{[^}]*margin-left:\s*0/s);
 });
 
