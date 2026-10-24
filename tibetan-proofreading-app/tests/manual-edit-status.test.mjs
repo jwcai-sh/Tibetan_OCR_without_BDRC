@@ -119,3 +119,31 @@ test('manual OCR edits immediately show a green status and update the displayed 
   assert.match(quality.textContent, /错误 1 字/);
   assert.match(quality.textContent, /错误率 33\.3%/);
 });
+
+test('manual OCR edit status and character count survive a page rerender', () => {
+  const context = makeContext();
+  const firstGroup = vm.runInContext(`renderProofreadEditorGroup({
+    index:0, side:'llm', label:'Gemini 识别', line:lineForTest,
+    peerLine:compareForTest.bdrc.lines[0], compare:compareForTest
+  })`, context);
+  const editor = firstGroup.children[1].children[0];
+  editor.textContent = 'བོན་';
+  editor.dispatch('input');
+
+  vm.runInContext(`globalThis.rerenderedLine = makeProofreadAiLine(
+    compareForTest,
+    getEffectiveOcrSideLines(compareForTest.llm)[0],
+    0
+  )`, context);
+  const rerenderedGroup = vm.runInContext(`renderProofreadEditorGroup({
+    index:0, side:'llm', label:'Gemini 识别', line:rerenderedLine,
+    peerLine:compareForTest.bdrc.lines[0], compare:compareForTest
+  })`, context);
+  const status = rerenderedGroup.children[0].children[2];
+  const quality = rerenderedGroup.children[1].children[1];
+
+  assert.equal(status.hidden, false, 'the manually edited status should remain after the view rebuilds');
+  assert.ok(status.classList.contains('is-manual-edit'));
+  assert.match(quality.textContent, /错误 1 字/);
+  assert.match(quality.textContent, /手动修改 1 字/);
+});

@@ -6480,6 +6480,10 @@ function makeProofreadAiLine(compare, rawAiLine, index, fallbackBbox = null) {
     reviewImage: rawAiLine?.reviewImage || rawAiLine?.review_image || null,
     recognitionError: String(rawAiLine?.recognitionError || rawAiLine?.recognition_error || ""),
     regionLineIndex: Number(rawAiLine?.regionLineIndex ?? rawAiLine?.region_line_index ?? 0),
+    manualBaselineText: typeof rawAiLine?.manualBaselineText === "string" ? rawAiLine.manualBaselineText : undefined,
+    manuallyEdited: Boolean(rawAiLine?.manuallyEdited),
+    manualErrorChars: Math.max(0, Number(rawAiLine?.manualErrorChars || 0)),
+    manualEditRanges: getManualEditRanges(rawAiLine),
   };
   if (line.reviewImage || line.recognitionError) return line;
   if (shouldShowAiVisionDiagnostic(compare, line, index)) {
