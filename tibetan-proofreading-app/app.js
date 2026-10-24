@@ -7704,6 +7704,20 @@ function createModelInputPreview(sourceLine, index) {
       wrapper.style.overflowY = "visible";
       strip.dataset.cropStrip = "true";
       wrapper.appendChild(strip);
+      if (previewImages.length === 1) {
+        const zoom = document.createElement("details");
+        zoom.className = "proofread-source-zoom";
+        const summary = document.createElement("summary");
+        summary.textContent = "放大查看这一行";
+        const scroll = document.createElement("div");
+        scroll.className = "proofread-source-zoom-scroll";
+        const fullImage = document.createElement("img");
+        fullImage.src = previewImages[0];
+        fullImage.alt = `第 ${index + 1} 行原始细节裁图`;
+        scroll.append(fullImage);
+        zoom.append(summary, scroll);
+        wrapper.append(zoom);
+      }
       const rowIndex = payload.review_image?.source_bbox?.physical_row_index;
       if (Number.isInteger(rowIndex)) {
         wrapper.dataset.physicalRowKey = JSON.stringify([payload.review_image.source_size, rowIndex]);

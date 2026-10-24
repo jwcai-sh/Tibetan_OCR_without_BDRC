@@ -2010,6 +2010,10 @@ body.is-resizing-panes * {
   display: block;
   object-fit: contain;
 }
+.proofread-source-zoom { margin-top: 6px; font-size: 12px; color: #53665b; }
+.proofread-source-zoom > summary { cursor: pointer; }
+.proofread-source-zoom-scroll { overflow-x: auto; margin-top: 6px; }
+.proofread-source-zoom-scroll img { display: block; width: auto; max-width: none; height: auto; }
 
 .proofread-editor-group {
   min-width: 0;
