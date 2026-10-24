@@ -42,6 +42,25 @@ test('server display hides BDRC and old Gemini without changing saved candidates
   });
 });
 
+test('Gemini visibility uses provider metadata when a saved page omits the model name', () => {
+  const ctx = context();
+  const result = vm.runInContext(`(() => {
+    const sideProvider = getVisibleServerCompare({
+      bdrc:{text:'',lines:[]},
+      llm:{text:'Gemini result',provider:'gemini',lines:[{text:'Gemini result'}]},
+    });
+    const lineProvider = getVisibleServerCompare({
+      bdrc:{text:'',lines:[]},
+      llm:{text:'Gemini line result',lines:[{text:'Gemini line result',provider:'gemini'}]},
+    });
+    return {sideProvider:sideProvider.llm.text,lineProvider:lineProvider.llm.text};
+  })()`, ctx);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    sideProvider:'Gemini result',
+    lineProvider:'Gemini line result',
+  });
+});
+
 test('restoring cached comparisons drops only the automatically seeded OpenAI sample', () => {
   const ctx = context();
   const reviews = vm.runInContext(`normalizeOcrCompare({

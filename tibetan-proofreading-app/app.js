@@ -8497,8 +8497,21 @@ function isAiOnlyMode() {
 }
 
 function isCurrentGeminiResult(side) {
-  const model = String(side?.model || side?.lines?.find((line) => line?.model)?.model || "").split(":").pop();
-  return model.startsWith("gemini-");
+  if (!hasOcrSideContent(side)) return false;
+  const model = String(side?.model || side?.lines?.find((line) => line?.model)?.model || "")
+    .split(":").pop().split("/").pop().trim().toLowerCase();
+  const provider = String(side?.provider || side?.lines?.find((line) => line?.provider)?.provider || "")
+    .trim().toLowerCase();
+  if (model.startsWith("gemini-")) {
+    const selectedModel = String(getSelectedGeminiModel() || "")
+      .split(":").pop().split("/").pop().trim().toLowerCase();
+    return !selectedModel || model === selectedModel;
+  }
+  if (model === "gemini") return true;
+  if (model) return false;
+  return provider === "gemini" || provider.includes("gemini")
+    || (!side?.model && String(side?.label || "").toLowerCase().includes("gemini")
+      && Boolean(side?.text || side?.lines?.some((line) => String(line?.text || "").trim())));
 }
 
 function getVisibleServerCompare(compare) {
