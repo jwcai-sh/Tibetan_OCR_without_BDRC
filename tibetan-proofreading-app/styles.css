@@ -2753,6 +2753,7 @@ body.is-resizing-panes * {
 }
 
 .app-shell.workbench-mode #workbenchView {
+  grid-row: 4;
   padding-top: 8px;
   padding-bottom: 10px;
 }
