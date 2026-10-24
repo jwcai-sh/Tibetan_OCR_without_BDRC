@@ -1359,7 +1359,7 @@ body.is-resizing-panes * {
 
 .markdown-source-preview {
   width: min(88%, 720px);
-  max-height: min(56vh, 620px);
+  max-height: calc(100% - 72px);
   overflow: auto;
   margin: 4px auto 0;
   padding: 14px 16px;
@@ -3074,9 +3074,10 @@ body.is-resizing-panes * {
     border-radius: 8px;
   }
 
-  .workspace > .viewer-pane {
-    height: min(62dvh, 620px);
-    min-height: 340px;
+  .workspace > .viewer-pane,
+  .workspace.translation-workflow > .viewer-pane {
+    height: max(620px, 82dvh);
+    min-height: 0;
   }
 
   .workspace > .ocr-pane,
