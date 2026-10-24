@@ -49,6 +49,7 @@ AGGREGATOR_API_KEY = os.environ.get("MODEL_AGGREGATOR_API_KEY", "")
 DEFAULT_MODEL = "gemini:gemini-2.5-flash" if USE_MODEL_AGGREGATOR else "qwen2.5-vl:7b"
 MODEL = os.environ.get("AI_VISION_MODEL", DEFAULT_MODEL)
 TIMEOUT = float(os.environ.get("AI_VISION_TIMEOUT", "120"))
+GEMINI_OCR_TIMEOUT = float(os.environ.get("AI_VISION_GEMINI_OCR_TIMEOUT", "300"))
 MAX_TOKENS = int(os.environ.get("AI_VISION_MAX_TOKENS", "8192"))
 TEMPERATURE = float(os.environ.get("AI_VISION_TEMPERATURE", "0.0"))
 MAX_IMAGE_SIDE = int(os.environ.get("AI_VISION_MAX_IMAGE_SIDE", "1800"))
@@ -1497,6 +1498,8 @@ def post_json(url: str, body: dict[str, Any], api_key: str = "", timeout: float 
         raise RuntimeError(f"AI Vision upstream HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"AI Vision upstream unavailable: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("AI Vision upstream request timed out") from exc
 
     return json.loads(response_body)
 
@@ -2001,7 +2004,10 @@ def call_vision_model(
         if model not in GEMINI_REVIEW_MODELS:
             raise RuntimeError("Gemini OCR 模型不在允许列表中，请刷新模型列表。")
         if USE_MODEL_AGGREGATOR:
-            return call_model_aggregator_images([(image_bytes, filename)], prompt, preserve_size=True, model_override=f"gemini:{model}")
+            return call_model_aggregator_images(
+                [(image_bytes, filename)], prompt, preserve_size=True,
+                model_override=f"gemini:{model}", request_timeout=GEMINI_OCR_TIMEOUT,
+            )
         result = call_openai_compatible_images([(image_bytes, filename)], prompt, model_override=model)
         if result.get("model") not in {model, f"gemini:{model}"}:
             raise RuntimeError("Gemini OCR 响应模型与所选模型不一致，结果未采用。")

@@ -4255,6 +4255,13 @@ function hasValidPageOcr(result) {
     && /[\u0f00-\u0fff0-9]/.test(String(line.text || "")));
 }
 
+function hasValidGeminiPageOcr(result) {
+  const side = getOcrSourceCompare(result)?.llm;
+  return Boolean(side && !side.error && isCurrentGeminiResult(side)
+    && (side.lines || []).some((line) => !line.deleted && !line.error && !line.diagnostic
+      && !isMissingOcrTranscription(line) && /[\u0f00-\u0fff0-9]/.test(String(line.text || ""))));
+}
+
 function updateBatchOcrProgress() {
   if (!els.batchOcrProgress) return;
   const progressKey = state.cacheKey ? `tibetan-ocr-batch:${state.cacheKey}` : "";
@@ -4292,7 +4299,7 @@ async function runOcrForRemainingPages() {
   const originalPage = state.pageNum;
   const sourceKey = state.cacheKey;
   const pages = Array.from({ length: state.pageCount }, (_, index) => index + 1)
-    .filter((page) => !hasValidPageOcr(state.ocrResults.get(page)));
+    .filter((page) => !hasValidGeminiPageOcr(state.ocrResults.get(page)));
   const job = { running: true, cancelled: false, currentPage: 0, total: state.pageCount,
     pages, skipped: state.pageCount - pages.length, success: [], failed: [] };
   state.batchOcr = job;
@@ -4306,7 +4313,7 @@ async function runOcrForRemainingPages() {
       try {
         await goToPage(page, { batch: true });
         await runOcrForCurrentPage({ skipBusy: true, skipPageSync: true, mode: getOcrMode() });
-        if (!hasValidPageOcr(state.ocrResults.get(page))) throw new Error("未返回有效 OCR 文字");
+        if (!hasValidGeminiPageOcr(state.ocrResults.get(page))) throw new Error("未返回有效 Gemini OCR 文字");
         await saveCachedResults({ immediateRemote: true });
         job.success.push(page);
       } catch (error) {
@@ -4368,7 +4375,7 @@ async function fetchOcrWithTransientRetry(endpoint, formData, retryTransient) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
       const response = await fetch(endpoint, { method: "POST", body: formData });
-      if (retryTransient && [502, 503, 504].includes(response.status) && attempt < maxRetries) {
+      if (retryTransient && [502, 503].includes(response.status) && attempt < maxRetries) {
         await waitForOcrRetry(attempt);
         continue;
       }
