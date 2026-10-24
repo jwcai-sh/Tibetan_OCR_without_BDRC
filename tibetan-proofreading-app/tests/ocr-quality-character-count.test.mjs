@@ -39,6 +39,22 @@ test('saved OCR quality uses the same visible character units as the line header
   assert.equal(saved.errorChars, 1);
 });
 
+test('saved OCR quality does not double-count a manual edit overlapping an error mark', () => {
+  const saved = vm.runInContext(`(() => {
+    state.ocrQualityReviews = [];
+    const compare = {llm:{model:'test',provider:'gemini'},sharedErrors:[
+      {blockIndex:0,llmRanges:[{start:0,end:3}]}
+    ]};
+    const line = {text:'ཀྱིམ',manualErrorChars:1};
+    const visible = getLineQualityStats(line, compare, 'llm', 0);
+    saveOcrQualityReview({result:{},compare,pageNum:1,blockIndex:0,text:line.text,manualErrorChars:line.manualErrorChars});
+    return {visible,state:state.ocrQualityReviews[0]};
+  })()`, context);
+  assert.equal(saved.visible.errorChars, 1);
+  assert.equal(saved.state.errorChars, saved.visible.errorChars,
+    'the persisted error count should match the error count shown in the editor');
+});
+
 test('changing one stacked glyph counts as one manual edit', () => {
   const edited = vm.runInContext(`updateManualEditTracking({}, 'ཀྱེམ', 'ཀྱིམ')`, context);
   assert.equal(edited.manualErrorChars, 1);

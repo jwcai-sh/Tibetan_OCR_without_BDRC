@@ -2119,6 +2119,12 @@ body.is-resizing-panes * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.proofread-editor-status.is-manual-edit {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #166534;
+  background: #dcfce7;
+}
 .proofread-editor-label > .proofread-line-quality {
   display: inline-flex;
   color: #5b6b63;

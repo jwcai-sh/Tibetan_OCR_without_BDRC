@@ -7877,13 +7877,16 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
   labelMeta.textContent = `${sourceLabel} 识别结果`;
   const statusEl = document.createElement("em");
   statusEl.className = "proofread-editor-status";
-  // Keep this hook in the header for review controls, but show diagnostics only
-  // in the result editor below so the same error is not repeated twice.
-  statusEl.hidden = true;
   const qualityEl = document.createElement("div");
   qualityEl.className = "proofread-line-quality proofread-result-quality";
   const updateQuality = () => {
     qualityEl.textContent = formatLineQualityStats(getLineQualityStats(line, compare, side, index));
+  };
+  const updateManualEditStatus = () => {
+    const hasManualChanges = getManualEditRanges(line).length > 0;
+    statusEl.hidden = !hasManualChanges;
+    statusEl.textContent = hasManualChanges ? "已人工修改" : "";
+    statusEl.classList.toggle("is-manual-edit", hasManualChanges);
   };
   updateQuality();
   labelEl.append(labelTitle, labelMeta, statusEl);
@@ -7914,8 +7917,6 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
     group.classList.toggle("has-diagnostic", diagnostic);
     editor.classList.toggle("is-empty", !text.trim() && !diagnostic);
     editor.classList.toggle("is-diagnostic", diagnostic);
-    statusEl.hidden = true;
-    statusEl.textContent = "";
     if (diagnostic) {
       const recognitionError = String(line?.recognitionError || "").trim();
       editor.textContent = recognitionError && !visibleText.includes(recognitionError)
@@ -7931,6 +7932,7 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
     if (!text.trim() && !diagnostic) {
       editor.textContent = editor.dataset.placeholder;
     }
+    updateManualEditStatus();
   };
   const syncEditorValue = (fromUserInput = false) => {
     if (isDiagnosticOcrLine(line) && !fromUserInput) {
@@ -7939,7 +7941,6 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
     }
     const value = normalizeOcrTextSpacing(getEditorText());
     if (line) {
-      line.text = value || "";
       if (fromUserInput) {
         line.error = false;
         line.missing = false;
@@ -7975,6 +7976,7 @@ function renderProofreadEditorGroup({ index, side, label, line, peerLine, compar
     userEdited = true;
     syncEditorValue(true);
     updateQuality();
+    updateManualEditStatus();
   });
   editor.addEventListener("blur", () => {
     if (userEdited) syncEditorValue(true);
@@ -9579,10 +9581,9 @@ function saveOcrQualityReview({ result, compare, pageNum, blockIndex, text, qual
     qualitySource.recognizedAt = String(result?.updatedAt || new Date().toISOString());
   }
   const metadata = getOcrQualityMetadata(compare, result, qualitySide);
-  const reviewedChars = countOcrCharacters(text);
+  const lineStats = getLineQualityStats({text, manualErrorChars}, compare, qualitySide, blockIndex);
+  const reviewedChars = lineStats.totalChars;
   if (!reviewedChars) return;
-  const markedErrorChars = countErrorRanges(text, getSharedErrorRanges(compare, qualitySide, blockIndex, text));
-  const errorChars = markedErrorChars + Math.max(0, Number(manualErrorChars) || 0);
   const matchIndex = state.ocrQualityReviews.findIndex((review) => (
     review.pageNum === pageNum &&
     review.blockIndex === blockIndex &&
@@ -9597,7 +9598,7 @@ function saveOcrQualityReview({ result, compare, pageNum, blockIndex, text, qual
     ...metadata,
     reviewedAt: new Date().toISOString(),
     reviewedChars,
-    errorChars: Math.min(errorChars, reviewedChars),
+    errorChars: lineStats.errorChars,
   };
   if (matchIndex >= 0) {
     state.ocrQualityReviews.splice(matchIndex, 1, review);
