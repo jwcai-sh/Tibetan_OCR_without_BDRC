@@ -2004,10 +2004,22 @@ def call_vision_model(
         if model not in GEMINI_REVIEW_MODELS:
             raise RuntimeError("Gemini OCR 模型不在允许列表中，请刷新模型列表。")
         if USE_MODEL_AGGREGATOR:
-            return call_model_aggregator_images(
-                [(image_bytes, filename)], prompt, preserve_size=True,
-                model_override=f"gemini:{model}", request_timeout=GEMINI_OCR_TIMEOUT,
-            )
+            candidates = [model]
+            if model == GEMINI_REVIEW_MODELS[0]:
+                candidates.extend(candidate for candidate in GEMINI_REVIEW_MODELS[1:] if candidate != model)
+            errors = []
+            for candidate in candidates:
+                try:
+                    return call_model_aggregator_images(
+                        [(image_bytes, filename)], prompt, preserve_size=True,
+                        model_override=f"gemini:{candidate}", request_timeout=GEMINI_OCR_TIMEOUT,
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"{candidate}: {exc}")
+                    detail = str(exc).lower()
+                    if not any(marker in detail for marker in ("http 429", "http 503", "high demand")):
+                        raise
+            raise RuntimeError("Gemini OCR 候选模型均暂时拥堵或限流：" + "；".join(errors))
         result = call_openai_compatible_images([(image_bytes, filename)], prompt, model_override=model)
         if result.get("model") not in {model, f"gemini:{model}"}:
             raise RuntimeError("Gemini OCR 响应模型与所选模型不一致，结果未采用。")

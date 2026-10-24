@@ -8510,9 +8510,7 @@ function isCurrentGeminiResult(side) {
   const provider = String(side?.provider || side?.lines?.find((line) => line?.provider)?.provider || "")
     .trim().toLowerCase();
   if (model.startsWith("gemini-")) {
-    const selectedModel = String(getSelectedGeminiModel() || "")
-      .split(":").pop().split("/").pop().trim().toLowerCase();
-    return !selectedModel || model === selectedModel;
+    return true;
   }
   if (model === "gemini") return true;
   if (model) return false;
