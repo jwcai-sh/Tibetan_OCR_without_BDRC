@@ -861,6 +861,7 @@ function updateRouteForWorkflow(workflow, options = {}) {
   const url = new URL(window.location.href);
   if (normalized === "home") {
     url.searchParams.delete("workflow");
+    url.searchParams.delete("book_id");
   } else {
     url.searchParams.set("workflow", normalized);
   }
@@ -1398,6 +1399,12 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
     state.remoteRestoreComplete = true;
+    if (isCloudDeployment() && project.remoteBookId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("book_id", project.remoteBookId);
+      url.searchParams.set("workflow", workflow);
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    }
     if (els.sourceRetryButton) {
       els.sourceRetryButton.hidden = true;
       els.sourceRetryButton.textContent = "重试加载当前页";
