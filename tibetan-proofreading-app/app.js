@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261025-cloud-original-v16";
+const APP_BUILD_ID = "20261025-job-status-v17";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -6971,7 +6971,8 @@ async function pollGeminiJobs() {
       if (job.actor !== cloudLibrary.actor || !["queued", "running", "uncertain", "submitting"].includes(job.status)) continue;
       try {
         const response = await fetch(`${job.endpoint}/jobs/${job.id}`, {signal: AbortSignal.timeout(15000)});
-        const payload = await parseOcrResponse(response);
+        const parsed = await parseOcrResponse(response);
+        const payload = {...parsed.raw, error: parsed.error};
         if (response.status === 401 || response.status === 403) continue;
         // A lost POST response may precede the server accepting the upload.
         if (response.status === 404 && Date.now() - job.created < 120000) continue;

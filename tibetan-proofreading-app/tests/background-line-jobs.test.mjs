@@ -28,7 +28,7 @@ const context = vm.createContext({
     }
     return {ok:true,status:200,json:async()=>({status:'running'})};
   },
-  parseOcrResponse:r=>r.json(),
+  parseOcrResponse:async r=>{const raw=await r.json();return {raw,error:raw.error || raw.detail};},
 });
 vm.runInContext(source.slice(start,end),context);
 const actualPoll = context.pollGeminiJobs;
