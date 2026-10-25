@@ -658,16 +658,40 @@ async def ai_layout(file: UploadFile = File(...), line_count: int = Form(0)) -> 
     return call_ai_layout(await file.read(), line_count)
 
 
+def render_line_preview(image, bbox, review_image, row_index, row_count, preview_format):
+    try:
+        return call_ai_line_preview(image, bbox, review_image, row_index, row_count, preview_format)
+    except RuntimeError as exc:
+        if not row_count or "原文物理行数与识别 block 数不一致" not in str(exc):
+            raise
+        result = call_ai_line_preview(image, bbox, review_image, "", "", preview_format)
+        source = (result.get("review_image") or {}).get("source_bbox") or {}
+        if not isinstance(source.get("physical_row_index"), int):
+            raise RuntimeError("原文行数不匹配，无法按坐标定位物理行")
+        result["approximateRowMatch"] = True
+        return result
+
+
+def cloud_line_preview(book_id, page_num, dpi, bbox, row_index, row_count):
+    image = get_book_page_preview(book_id, page_num, dpi, "jpeg").body
+    return render_line_preview(image, bbox, "", row_index, row_count, "jpeg")
+
+
 @app.post("/api/line-preview")
 async def ai_line_preview(
-    file: UploadFile = File(...), bbox: str = Form(...), review_image: str = Form(""),
+    bbox: str = Form(...), file: UploadFile | None = File(None), review_image: str = Form(""),
     physical_row_index: str = Form(""), physical_row_count: str = Form(""),
-    preview_format: str = Form(""),
+    preview_format: str = Form(""), book_id: str = Form(""), page_num: int = Form(0), dpi: int = Form(260),
 ) -> dict[str, Any]:
     try:
-        return call_ai_line_preview(
-            await file.read(), bbox, review_image, physical_row_index, physical_row_count, preview_format
-        )
+        if book_id:
+            if file is not None or not re.fullmatch(r"[a-f0-9]{32}", book_id) or page_num < 1 or not 72 <= dpi <= 360:
+                raise HTTPException(400, "云端预览参数无效")
+            return await run_in_threadpool(cloud_line_preview, book_id, page_num, dpi, bbox, physical_row_index, physical_row_count)
+        if file is None:
+            raise HTTPException(400, "缺少预览图片")
+        return await run_in_threadpool(render_line_preview, await file.read(), bbox, review_image,
+                                     physical_row_index, physical_row_count, preview_format)
     except (ValueError, KeyError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 

@@ -6371,6 +6371,14 @@ function renderAiOcrPanelForPage(compare = null) {
   updateAiOcrPanelMeta(sourceCompare);
 }
 
+function getUnboundSavedParagraphs(result) {
+  const stored = result?.lines || [];
+  const paragraphs = String(result?.text || "").split(/\r?\n/).map(text => text.trim()).filter(Boolean);
+  if (!stored.length || paragraphs.length <= stored.length || stored.some(line => line?.deleted)) return [];
+  if (!stored.every((line, index) => String(line?.text || "").trim() === paragraphs[index])) return [];
+  return paragraphs.slice(stored.length);
+}
+
 function renderProofreadMergedView() {
   els.ocrLineCompare.innerHTML = "";
   els.ocrLineCompare.classList.add("proofread-block-list");
@@ -6422,6 +6430,26 @@ function renderProofreadMergedView() {
       compare,
     }));
   });
+  const unbound = getUnboundSavedParagraphs(result);
+  if (unbound.length) {
+    const notice = document.createElement("section");
+    notice.className = "proofread-block-card";
+    const title = document.createElement("strong");
+    title.textContent = `另有 ${unbound.length} 段已保存校对文本，缺少分行绑定`;
+    const detail = document.createElement("p");
+    detail.textContent = "以下文字仍然保留。段落不等于原图物理行，暂以只读方式完整显示；未重新识别或覆盖任何校对。";
+    notice.append(title, detail);
+    unbound.forEach((text, index) => {
+      const paragraph = document.createElement("textarea");
+      paragraph.readOnly = true;
+      paragraph.rows = 3;
+      paragraph.value = text;
+      paragraph.setAttribute("aria-label", `保留的未绑定校对段落 ${index + 1}`);
+      paragraph.style.width = "100%";
+      notice.append(paragraph);
+    });
+    fragment.append(notice);
+  }
   els.ocrLineCompare.appendChild(fragment);
   if (window.lucide) {
     window.lucide.createIcons();
@@ -7959,10 +7987,16 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
   if (lineCropRequests.has(key)) return lineCropRequests.get(key);
   const pending = (async () => {
     if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
-    const image = await getSourcePreviewPageBlob(context.pageNum);
-    if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
     const data = new FormData();
-    data.append("file", image, image.type === "image/jpeg" ? "source-preview.jpg" : makePageImageName());
+    if (isCloudDeployment() && state.remoteBookId && state.remoteServerPdf) {
+      data.append("book_id", state.remoteBookId);
+      data.append("page_num", String(context.pageNum));
+      data.append("dpi", String(context.dpi));
+    } else {
+      const image = await getSourcePreviewPageBlob(context.pageNum);
+      data.append("file", image, image.type === "image/jpeg" ? "source-preview.jpg" : makePageImageName());
+    }
+    if (state.cacheKey !== context.cacheKey || state.pageNum !== context.pageNum) throw new Error("页面已切换");
     data.append("bbox", JSON.stringify(sourceLine.bbox));
     data.append("preview_format", "jpeg");
     const profileId = typeof context.profile === "string" ? context.profile : context.profile?.id;

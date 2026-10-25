@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const source=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+const context=vm.createContext({});
+vm.runInContext(source.slice(source.indexOf('function getUnboundSavedParagraphs('),source.indexOf('function renderProofreadMergedView(')),context);
+const get=r=>Array.from(context.getUnboundSavedParagraphs(r));
+const original={text:'edited first\nsecond\nthird\nfourth',lines:[{text:'edited first',manuallyEdited:true,manualEditRanges:[{start:0,end:2}]}]};
+const snapshot=JSON.stringify(original);
+assert.deepEqual(get(original),['second','third','fourth']);
+assert.equal(JSON.stringify(original),snapshot);
+assert.deepEqual(get({text:'a\nb',lines:[{text:'different'}]}),[]);
+assert.deepEqual(get({text:'a\nb',lines:[{text:'a',deleted:true}]}),[]);
+assert.deepEqual(get({text:'a\nb',lines:[{text:'a'},{text:'b'}]}),[]);
+console.log('Unbound saved paragraphs: passed (read-only, exact prefix, no deleted-row resurrection)');
