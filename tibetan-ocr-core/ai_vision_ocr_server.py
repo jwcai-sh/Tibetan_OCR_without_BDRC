@@ -1574,6 +1574,16 @@ def call_model_aggregator_images(
     images: list[tuple[bytes, str]], prompt: str, *, preserve_size: bool = False, model_override: str = "", request_timeout: float | None = None
 ) -> dict[str, Any]:
     """Send one or more ordered image attachments in a single vision request."""
+    deadline = time.monotonic() + request_timeout if request_timeout is not None else None
+
+    def remaining_timeout() -> float:
+        if deadline is None:
+            return TIMEOUT
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("单行识别上游等待超时，原结果保留；请稍后再试。")
+        return remaining
+
     attachment_ids: list[str] = []
     sent_sizes: list[int] = []
     for image_bytes, filename in images:
@@ -1594,6 +1604,7 @@ def call_model_aggregator_images(
                 "dataUrl": data_url,
             },
             AGGREGATOR_API_KEY,
+            timeout=remaining_timeout(),
         )
         if not upload.get("ok") or not upload.get("id"):
             raise RuntimeError(f"ModelAggregator upload failed: {upload.get('error') or upload}")
@@ -1618,7 +1629,7 @@ def call_model_aggregator_images(
         aggregator_url("/api/aggregate/image-to-markdown"),
         request_body,
         AGGREGATOR_API_KEY,
-        **({"timeout": request_timeout} if request_timeout is not None else {}),
+        timeout=remaining_timeout(),
     )
     if not raw.get("ok"):
         attempts = summarize_attempts(raw.get("attempts"))
@@ -1666,7 +1677,7 @@ def call_model_aggregator(image_bytes: bytes, filename: str, prompt: str) -> dic
 
 
 def call_openai_compatible_images(
-    images: list[tuple[bytes, str]], prompt: str, model_override: str = ""
+    images: list[tuple[bytes, str]], prompt: str, model_override: str = "", request_timeout: float | None = None
 ) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     content.extend({
@@ -1684,7 +1695,7 @@ def call_openai_compatible_images(
             }
         ],
     }
-    raw = post_json(chat_completions_url(), body, API_KEY)
+    raw = post_json(chat_completions_url(), body, API_KEY, timeout=request_timeout)
     text = parse_model_text(raw).strip()
     primary_image = images[0][0] if images else b""
     lines, layout_bboxes = attach_layout_bboxes(
@@ -1859,13 +1870,14 @@ def call_line_review_vision(
         model = model.removeprefix("gemini:")
         if model not in GEMINI_REVIEW_MODELS:
             raise RuntimeError("Gemini 复核模型不在允许列表中，请刷新模型列表。")
+    request_timeout = min(request_timeout if request_timeout is not None else 60.0, TIMEOUT)
     images = [(image_bytes, filename)]
     prompt = ("图片是完整原页。只转录中间栏坐标 " + json.dumps(bbox) +
               " 对应的一行藏文，忽略左右栏、邻行与边框；保留红字、叠字和标点。只输出原文。")
     if USE_MODEL_AGGREGATOR:
         result = call_model_aggregator_images(images, prompt, preserve_size=True, model_override=f"gemini:{model}" if model else "", **({"request_timeout": request_timeout} if request_timeout is not None else {}))
     else:
-        result = call_openai_compatible_images(images, prompt, model_override=model)
+        result = call_openai_compatible_images(images, prompt, model_override=model, request_timeout=request_timeout)
         if model and str(result.get("model") or "").removeprefix("gemini:") != model:
             raise RuntimeError("Gemini 单行复核响应模型与所选模型不一致，原结果保留。")
     text = "".join(part.strip() for part in str(result.get("text") or "").splitlines() if part.strip())

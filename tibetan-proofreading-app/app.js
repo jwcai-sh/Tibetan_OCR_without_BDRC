@@ -4574,13 +4574,23 @@ async function callAiVisionLineReviewEndpoint(endpoint, blob, bbox, draftText = 
   if (primaryLine) formData.append("primary_line", "1");
   if (model) formData.append("model", model);
 
-  const response = await fetchOcrWithTransientRetry(endpoint, formData, true);
-  const parsed = await parseOcrResponse(response);
-  if (!response.ok) {
-    throw new Error(parsed.error || `HTTP ${response.status}`);
+  // A line review can incur a model charge: never silently replay a failed POST.
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 75000);
+  try {
+    const response = await fetch(endpoint, {method: "POST", body: formData, signal: controller.signal});
+    const parsed = await parseOcrResponse(response);
+    if (!response.ok) throw new Error(parsed.error || `HTTP ${response.status}`);
+    assertSupportedAiVisionResponse(parsed);
+    return parsed;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("本次单行识别等待已超过 75 秒，已停止等待，原结果保留。上游可能仍在处理，请勿连续重试。");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
   }
-  assertSupportedAiVisionResponse(parsed);
-  return parsed;
 }
 
 function mergeSourceCoordinates(lines, layoutLines) {
@@ -6895,12 +6905,20 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
   const model = select.value;
   pageReviewPending = true;
   setBusy(true);
-  setStatus(`正在用 ${model} 重新识别第 ${pageNum} 页第 ${index + 1} 行…`, "warn");
+  const startedAt = Date.now();
+  let stage = "正在准备原页图片";
+  const showProgress = () => setStatus(
+    `第 ${pageNum} 页第 ${index + 1} 行 · ${model} · ${stage} · 已等待 ${Math.floor((Date.now() - startedAt) / 1000)} 秒`, "warn");
+  showProgress();
+  const progressTimer = window.setInterval(showProgress, 1000);
   try {
     const blob = await getCurrentPageImageBlob();
     if (state.pageNum !== pageNum || state.cacheKey !== sourceKey) throw new Error("页面已切换，原结果保留。");
+    stage = "正在上传并等待模型响应（单次请求，最多等待 75 秒）";
+    showProgress();
     const payload = await callAiVisionLineReviewEndpoint(endpoint, blob, bbox,
       compare?.llm?.lines[index]?.text || "", model, null, source?.regionId || "center");
+    window.clearInterval(progressTimer);
     const text = normalizeOcrTextSpacing(validateIndependentReviewText(payload.text || payload.lines?.[0]?.text));
     if (payload.model && String(payload.model).split(":").pop() !== model) {
       throw new Error("返回模型与所选模型不一致，原结果保留。");
@@ -6930,8 +6948,10 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
     await saved;
     if (state.pageNum === pageNum) updateOcrPanelForPage();
   } catch (error) {
+    window.clearInterval(progressTimer);
     setStatus(`第 ${pageNum} 页第 ${index + 1} 行重新识别失败：${error.message || error}`, "error");
   } finally {
+    window.clearInterval(progressTimer);
     pageReviewPending = false;
     setBusy(false);
     refreshGeminiRowModelSelectors();
