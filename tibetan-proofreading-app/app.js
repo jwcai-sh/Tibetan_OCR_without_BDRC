@@ -7812,7 +7812,19 @@ function createModelInputPreview(sourceLine, index) {
         mergeDuplicateSourcePreviews(wrapper.closest("#ocrLineCompare"));
       }
     } catch (error) {
-      if (wrapper.isConnected) wrapper.textContent = `裁剪预览失败：${error.message}`;
+      if (!wrapper.isConnected) return;
+      if (String(error.message || "").includes("原文物理行数与识别 block 数不一致")) {
+        const approximate = createSourceBlockPreviewCanvas(sourceLine);
+        if (approximate) {
+          const note = document.createElement("small");
+          note.textContent = "识别 block 与原文物理行数不同；显示本 block 的坐标区域，请对照左栏整页核对。";
+          wrapper.style.height = "auto";
+          wrapper.style.minHeight = "0";
+          wrapper.replaceChildren(note, approximate);
+          return;
+        }
+      }
+      wrapper.textContent = `裁剪预览失败：${error.message}`;
     }
   };
   if ("IntersectionObserver" in window) {

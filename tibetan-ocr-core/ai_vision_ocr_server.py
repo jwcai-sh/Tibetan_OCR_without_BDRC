@@ -1859,15 +1859,15 @@ def call_line_review_vision(
         model = model.removeprefix("gemini:")
         if model not in GEMINI_REVIEW_MODELS:
             raise RuntimeError("Gemini 复核模型不在允许列表中，请刷新模型列表。")
-        if not USE_MODEL_AGGREGATOR:
-            raise RuntimeError("Gemini Vision 复核需要本地 Gemini 聚合服务；不会转发到其他提供商。")
     images = [(image_bytes, filename)]
     prompt = ("图片是完整原页。只转录中间栏坐标 " + json.dumps(bbox) +
               " 对应的一行藏文，忽略左右栏、邻行与边框；保留红字、叠字和标点。只输出原文。")
     if USE_MODEL_AGGREGATOR:
         result = call_model_aggregator_images(images, prompt, preserve_size=True, model_override=f"gemini:{model}" if model else "", **({"request_timeout": request_timeout} if request_timeout is not None else {}))
     else:
-        result = call_openai_compatible_images(images, prompt)
+        result = call_openai_compatible_images(images, prompt, model_override=model)
+        if model and str(result.get("model") or "").removeprefix("gemini:") != model:
+            raise RuntimeError("Gemini 单行复核响应模型与所选模型不一致，原结果保留。")
     text = "".join(part.strip() for part in str(result.get("text") or "").splitlines() if part.strip())
     return {
         **result,

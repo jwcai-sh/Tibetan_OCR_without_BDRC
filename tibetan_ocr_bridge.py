@@ -25,6 +25,16 @@ def call_ai_layout(image: bytes, line_count: int) -> dict[str, Any]:
     return load_ai_ocr_module().build_layout_payload(image, line_count)
 
 
+def call_ai_line_review(
+    image: bytes, filename: str, bbox: str, draft: str = "", model: str = "", region_id: str = "",
+) -> dict[str, Any]:
+    module = load_ai_ocr_module()
+    return module.call_line_review_vision(
+        image, filename, module.parse_normalized_bbox(bbox), draft, model,
+        allow_page_numbers=region_id in {"left", "right"},
+    )
+
+
 def call_ai_line_preview(
     image: bytes, bbox: str, review_image: str = "",
     physical_row_index: str = "", physical_row_count: str = "",

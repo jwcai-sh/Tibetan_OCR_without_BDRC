@@ -30,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_ocr, call_ai_page_review, call_ai_review_models
+from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_line_review, call_ai_ocr, call_ai_page_review, call_ai_review_models
 from tibetan_translation_bridge import call_translation, translation_health
 from zeabur_app import collaboration
 
@@ -670,6 +670,23 @@ async def ai_line_preview(
         )
     except (ValueError, KeyError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/line-review")
+async def ai_line_review(
+    file: UploadFile = File(...), bbox: str = Form(...), ocr_text: str = Form(""),
+    model: str = Form(""), region_id: str = Form(""),
+) -> dict[str, Any]:
+    try:
+        return await run_in_threadpool(
+            call_ai_line_review, await file.read(), file.filename or "page.png",
+            bbox, ocr_text, model, region_id,
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        detail = load_ai_ocr_module().redact_sensitive(str(exc))
+        raise HTTPException(502, detail[:1500]) from exc
 
 
 @app.get("/api/review-models")
