@@ -28,7 +28,7 @@
       };
       window.setTimeout(window.__tibetanWorkbenchBootFailure, 30000);
     </script>
-    <script src="./app.js?v=20261025-line-review-preview-v11" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
+    <script src="./app.js?v=20261025-collab-preview-v12" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -385,6 +385,7 @@
           <section id="collaborationPanel" class="collaboration-panel" hidden aria-label="多人协作任务">
             <strong>多人协作 · 第 <span id="collabPageNumber">1</span> 页</strong>
             <button id="collabShowHistory" class="ghost-button compact" type="button">查看本页修改历史</button>
+            <button id="collabRetrySync" class="ghost-button compact" type="button" hidden>重试云端同步</button>
             <button id="collabLogout" class="ghost-button compact" type="button">退出协作</button>
             <span id="collabFeedback" role="status"></span>
           </section>

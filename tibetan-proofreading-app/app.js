@@ -290,7 +290,7 @@ function cacheElements() {
     "cloudLibraryPassword",
     "collaboratorName",
     "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout", "collaborationRetryButton",
-    "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabLogout", "collabFeedback",
+    "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabRetrySync", "collabLogout", "collabFeedback",
     "cloudLibraryUnlockButton",
     "cloudLibraryStatus",
     "cloudLibraryFiles",
@@ -446,6 +446,7 @@ function wireEvents() {
       void renderCurrentPage().catch(() => {});
     }
   });
+  bindOptionalClick("collabRetrySync", () => void retryCollaborationSync());
   bindOptionalClick("cloudLibraryUploadButton", () => els.cloudLibraryUploadInput?.click());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
   els.cloudLibraryUploadInput?.addEventListener("change", (event) => {
@@ -1412,6 +1413,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       els.sourceRetryButton.textContent = "重试加载当前页";
     }
     setCollaborationFeedback("");
+    if (els.collabRetrySync) els.collabRetrySync.hidden = true;
     if (pendingPages.length && !remoteState.collaboration_degraded) {
       setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
     } else {
@@ -3366,6 +3368,8 @@ async function flushRemoteStateSaves() {
             ? `当前修改已同步；本机第 ${[...state.remoteDeferredPages].join("、")} 页仍待复核同步。`
             : "云端校对状态已同步。", state.remoteDeferredPages.size ? "warn" : "ok");
         }
+        if (els.collabRetrySync) els.collabRetrySync.hidden = true;
+        setCollaborationFeedback("");
       } catch (error) {
         if (state.remoteBookId !== bookId) break;
         console.warn("Failed to save remote OCR state", error);
@@ -3375,8 +3379,11 @@ async function flushRemoteStateSaves() {
           els.sourceRetryButton.textContent = "重试云端校对状态";
           els.sourceRetryButton.hidden = false;
         }
-        setStatus(`本地已保存，但云端校对状态同步失败：${error.message || error}。请重试云端校对状态。`, "warn");
-        setCollaborationFeedback(error.message || String(error), true);
+        const timeout = error.name === "TimeoutError" || /signal timed out|请求超时/i.test(String(error.message || ""));
+        const detail = timeout ? "云端同步请求超时" : (error.message || String(error));
+        setStatus(`${state.localCacheQuotaExceeded ? "修改仍保留在当前页面，请勿刷新" : "本机已保存"}，但${detail}。请点击协作栏的“重试云端同步”。`, "warn");
+        setCollaborationFeedback(`${detail}；点击“重试云端同步”。`, true);
+        if (els.collabRetrySync) els.collabRetrySync.hidden = false;
         break;
       }
     }
@@ -3385,6 +3392,59 @@ async function flushRemoteStateSaves() {
   try { await drain; }
   finally {
     if (state.remoteSavePromise === drain) state.remoteSavePromise = null;
+  }
+}
+
+async function retryCollaborationSync() {
+  if (!state.remoteBookId || state.remoteSavePromise || !els.collabRetrySync) return;
+  const bookId = state.remoteBookId;
+  els.collabRetrySync.disabled = true;
+  setCollaborationFeedback("正在核对云端版本并重试同步…");
+  try {
+    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
+      credentials: "same-origin",
+      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
+    });
+    const remote = await response.json().catch(() => ({}));
+    if (!response.ok || remote.collaboration_degraded) throw new Error(remote.detail || "协作数据库暂不可用");
+    if (state.remoteBookId !== bookId) return;
+    const current = {
+      ocrResults: serializeResultMap(state.ocrResults),
+      translationResults: serializeResultMap(state.translationResults),
+      ocrQualityReviews: state.ocrQualityReviews,
+    };
+    const changed = findChangedRemotePages(current, state.remotePageSnapshots);
+    const revisions = remote.page_revisions || {};
+    const conflicts = changed.filter((page) => {
+      if (Number(revisions[page] || 0) === Number(state.remotePageRevisions[page] || 0)) return false;
+      if (remotePageFingerprint(remote, page) === remotePageFingerprint(current, page)) {
+        state.remotePageSnapshots[page] = remotePageFingerprint(current, page);
+        return false;
+      }
+      return true;
+    });
+    if (conflicts.length) throw new Error(`第 ${conflicts.join("、")} 页已有其他协作者的新修改；当前页面内容仍保留，请先复核冲突。`);
+    state.remotePageRevisions = {
+      ...state.remotePageRevisions,
+      ...Object.fromEntries(changed.map((page) => [page, revisions[page] || 0])),
+    };
+    state.remoteRestoreComplete = true;
+    const saved = saveCachedResults({ immediateRemote: true });
+    if (saved === false) throw new Error("当前修改未能保存，请保持页面打开并重试。");
+    await saved;
+    if (!state.remoteRestoreComplete) return;
+    els.collabRetrySync.hidden = true;
+    if (els.sourceRetryButton) {
+      els.sourceRetryButton.hidden = true;
+      els.sourceRetryButton.textContent = "重试加载当前页";
+    }
+    setCollaborationFeedback("");
+    setStatus("云端校对状态已同步。", "ok");
+  } catch (error) {
+    state.remoteRestoreComplete = false;
+    setCollaborationFeedback(`重试失败：${error.message || error}`, true);
+  } finally {
+    els.collabRetrySync.disabled = false;
   }
 }
 
@@ -7820,6 +7880,8 @@ function createModelInputPreview(sourceLine, index) {
           note.textContent = "识别 block 与原文物理行数不同；显示本 block 的坐标区域，请对照左栏整页核对。";
           wrapper.style.height = "auto";
           wrapper.style.minHeight = "0";
+          wrapper.style.flexDirection = "column";
+          wrapper.style.alignItems = "stretch";
           wrapper.replaceChildren(note, approximate);
           return;
         }
@@ -7930,6 +7992,7 @@ function createSourceBlockPreviewCanvas(sourceLine, allowHiddenSource = false) {
     ctx.rotate(-Math.PI / 2);
   }
   ctx.drawImage(source, sx, sy, sw, sh, 0, 0, sw * scale, sh * scale);
+  if (allowHiddenSource) canvas.style.flex = "0 0 auto";
   wrapper.appendChild(canvas);
   return wrapper;
 }
