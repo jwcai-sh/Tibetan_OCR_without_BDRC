@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261023-cloud-pages-v3";
+const APP_BUILD_ID = "20261025-translation-open-v10";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -217,6 +217,7 @@ const state = {
   remoteSaveTimer: null,
   remoteSavePromise: null,
   remotePendingPayload: null,
+  localCacheQuotaExceeded: false,
   layoutHydrationInFlight: new Map(),
   activeProjectRestoreInFlight: false,
   documentRequestId: 0,
@@ -911,6 +912,7 @@ function showWorkbenchView(workflow = "ocr", options = {}) {
   setAppTitle("藏文典籍翻译工作台");
   if (isTranslation) {
     state.layout.translationCollapsed = false;
+    state.layout.collapsed.viewer = false;
     els.workspace.classList.remove("proofread-merged-view");
     els.ocrLineCompare.classList.remove("proofread-block-list");
     state.ocrView = "lines";
@@ -1324,6 +1326,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     if (stateResult.error) {
       const error = stateResult.error;
       state.remoteRestoreInFlight = false;
+      if (restoreCachedResults()) await renderCurrentPage();
       if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
         requestCollaborationLogin(project, workflow);
         return;
@@ -1384,8 +1387,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       try { window.localStorage.setItem(`${cacheKey}:before-cloud-restore`, previousLocalCache); }
       catch (error) { console.warn("Could not preserve pre-restore local cache", error); }
     }
-    window.localStorage.setItem(cacheKey, JSON.stringify(restoredCache));
-    restoreCachedResults();
+    restoreCachedResults(restoredCache);
     await renderCurrentPage();
     state.remotePageRevisions = remoteState.page_revisions || {};
     state.remotePageSnapshots = makeRemotePageSnapshots({
@@ -2811,7 +2813,7 @@ async function loadFile(file, options = {}) {
   if (isMarkdownFile(file)) {
     await loadMarkdown(file);
     if (requestId !== state.documentRequestId) return false;
-    saveCachedResults();
+    if (!state.remoteRestoreInFlight) saveCachedResults();
     return true;
   }
 
@@ -2997,7 +2999,7 @@ async function loadMarkdown(file) {
 
   els.sourceTitle.textContent = state.sourceName;
   els.ocrTitle.textContent = isPlainText ? "文本文件" : "Markdown 文本";
-  const restored = restoreCachedResults();
+  const restored = state.remoteRestoreInFlight ? false : restoreCachedResults();
   const hasRestoredResult = state.ocrResults.has(1);
   if (!hasRestoredResult) {
     state.ocrResults.set(1, {
@@ -3007,7 +3009,7 @@ async function loadMarkdown(file) {
       updatedAt: new Date().toISOString(),
     });
   }
-  if (!restored) {
+  if (!restored && !state.remoteRestoreInFlight) {
     saveCachedResults();
   }
   setStatus(
@@ -3116,6 +3118,7 @@ function resetDocumentState() {
   }
   state.remoteSavePromise = null;
   state.remotePendingPayload = null;
+  state.localCacheQuotaExceeded = false;
   state.renderToken += 1;
 
   els.thumbnailList.innerHTML = "";
@@ -3185,14 +3188,14 @@ function sanitizeCachedSourceCoordinates(compare, layoutVersion) {
   };
 }
 
-function restoreCachedResults() {
+function restoreCachedResults(payloadOverride = null) {
   if (!state.cacheKey || !state.pageCount) return false;
 
   try {
-    const raw = window.localStorage.getItem(state.cacheKey);
-    if (!raw) return false;
+    const raw = payloadOverride ? null : window.localStorage.getItem(state.cacheKey);
+    if (!payloadOverride && !raw) return false;
 
-    const payload = JSON.parse(raw);
+    const payload = payloadOverride || JSON.parse(raw);
     if (payload.pageCount && payload.pageCount !== state.pageCount) {
       return false;
     }
@@ -3264,9 +3267,19 @@ function saveCachedResults(options = {}) {
       translationResults: serializeResultMap(state.translationResults),
       ocrQualityReviews: state.ocrQualityReviews,
     };
-    window.localStorage.setItem(state.cacheKey, JSON.stringify(payload));
+    const canSaveRemotely = isCloudDeployment() && state.remoteBookId &&
+      !state.remoteRestoreInFlight && state.remoteRestoreComplete;
+    if (!state.localCacheQuotaExceeded || !canSaveRemotely) {
+      try {
+        window.localStorage.setItem(state.cacheKey, JSON.stringify(payload));
+      } catch (error) {
+        if (!canSaveRemotely) throw error;
+        state.localCacheQuotaExceeded = true;
+        console.warn("Browser cache is full; saving proofreading changes to cloud only", error);
+      }
+    }
     const remoteSave = scheduleRemoteStateSave(payload, options.immediateRemote);
-    renderHomeDashboard();
+    if (!els.homeView.hidden) renderHomeDashboard();
     return remoteSave ?? true;
   } catch (error) {
     console.warn("Failed to save cached OCR state", error);
@@ -9870,6 +9883,11 @@ function updateOcrPanelForPage() {
     : result?.text
     ? (isDirectTextSource(result.source) ? "var(--blue)" : "var(--green-deep)")
     : "var(--muted)";
+  if (state.activeWorkflow === "translation") {
+    els.ocrLineCompare.replaceChildren();
+    els.aiOcrLineCompare.replaceChildren();
+    return;
+  }
   renderCurrentOcrView();
   renderSourceBlockOverlay();
   updateSummary();
