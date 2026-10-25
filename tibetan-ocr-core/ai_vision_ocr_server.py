@@ -1762,7 +1762,7 @@ def call_model_aggregator_gemini_page(image_bytes: bytes, filename: str, prompt:
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": image_data_url(image_bytes, filename)}},
         ]}],
-    }, AGGREGATOR_API_KEY)
+    }, AGGREGATOR_API_KEY, timeout=GEMINI_OCR_TIMEOUT)
     if not raw.get("ok"):
         raise RuntimeError(f"Gemini 整页复核失败：{redact_sensitive(str(raw.get('error') or '模型调用失败'))}")
     resolved = str(raw.get("modelRef") or raw.get("model") or "").strip()
@@ -1780,9 +1780,21 @@ def call_gemini_page_review(image_bytes: bytes, filename: str, rows: list, model
     targets = normalize_center_page_rows(rows)
     prompt = center_page_prompt(targets)
     if USE_MODEL_AGGREGATOR:
-        result = call_model_aggregator_gemini_page(image_bytes, filename, prompt, model)
-        response_text = str(result.get("text") or "")
-        actual_model = result.get("model", f"gemini:{model}")
+        candidates = [model]
+        if model == GEMINI_REVIEW_MODELS[0]:
+            candidates.extend(candidate for candidate in GEMINI_REVIEW_MODELS[1:] if candidate != model)
+        failures = []
+        for candidate in candidates:
+            try:
+                result = call_model_aggregator_gemini_page(image_bytes, filename, prompt, candidate)
+                response_text = str(result.get("text") or "")
+                lines = parse_center_page_response(response_text, targets)
+                return {"text": "\n".join(line["text"] for line in lines), "lines": lines,
+                        "model": result.get("model", f"gemini:{candidate}"), "provider": "gemini",
+                        "recognition_scope": "whole-page"}
+            except (RuntimeError, ValueError) as exc:
+                failures.append(f"{candidate}: {redact_sensitive(str(exc))}")
+        raise RuntimeError("Gemini 整页逐行识别未返回完整结果：" + "；".join(failures))
     else:
         result = call_openai_compatible_images([(image_bytes, filename)], prompt, model_override=model)
         response_text = str(result.get("text") or "")

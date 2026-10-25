@@ -4169,6 +4169,11 @@ async function runOcrForCurrentPage(options = {}) {
     setStatus(`正在生成第 ${state.pageNum} 页 OCR 图片...`, "warn");
     const blob = await getCurrentPageImageBlob();
 
+    if (profile.id === "traditional" && getOcrSourceCompare(state.ocrResults.get(state.pageNum))?.bdrc?.lines?.length) {
+      await runTraditionalGeminiLines(endpoint, blob, getSelectedGeminiModel());
+      return;
+    }
+
     setStatus(`正在调用 ${engineLabel} OCR 接口...`, "warn");
     const parsed = await callOcrEndpoint(endpoint, blob, {
       engine: "ai_vision",
@@ -4218,7 +4223,7 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
   if (!rows.length) throw new Error("未检测到中间栏文字行，原结果保留。");
   if (state.pageNum !== pageNum || state.cacheKey !== sourceKey) throw new Error("页面已切换，请返回原页重试。");
   setStatus(`Gemini 正在读取整页原图并识别中间栏 ${rows.length} 行…`, "warn");
-  const payload = await requestWholePageReview(endpoint.replace(/\/ocr\/?$/, "/gemini-page-review"), blob, rows, selectedModel);
+  const payload = await requestWholePageReview(endpoint.replace(/\/(?:ai-)?ocr\/?$/, "/gemini-page-review"), blob, rows, selectedModel);
   const reviewed = mergePageReviews([], payload, rows, "gemini");
   if (state.pageNum !== pageNum || state.cacheKey !== sourceKey || state.ocrResults.get(pageNum) !== original || JSON.stringify(original) !== before) {
     throw new Error("页面或校对结果已改变，未覆盖原结果。");
