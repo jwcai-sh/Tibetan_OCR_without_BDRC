@@ -249,6 +249,7 @@ window.addEventListener("DOMContentLoaded", () => {
   configureDeploymentEndpoints();
   wireEvents();
   initializeGeminiJobs();
+  const localCacheReady = initializeProofreadFallback();
   const cloudLibraryReady = initializeCloudLibrary();
   renderTranslationRoleOptions();
   renderActiveTranslationRoleMeta();
@@ -256,10 +257,15 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshControls();
   updateSummary();
   updateTranslationSummary();
-  void cloudLibraryReady.then(() => {
+  void Promise.all([cloudLibraryReady, localCacheReady]).then(() => {
     if (cloudLibrary.authMode !== "unknown") restoreRouteFromLocation();
   });
   window.addEventListener("popstate", restoreRouteFromLocation);
+  window.addEventListener("beforeunload", event => {
+    if (!state.localProofreadSavePending && !state.localCacheQuotaExceeded) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
   warnIfFileProtocol();
   if (window.lucide) {
     window.lucide.createIcons();
@@ -811,6 +817,7 @@ function getWorkflowFromLocation() {
 }
 
 async function restoreRouteFromLocation() {
+  await initializeProofreadFallback();
   const workflow = getWorkflowFromLocation();
   if (workflow === "ocr" || workflow === "translation") {
     showWorkbenchView(workflow, { updateRoute: false });
@@ -1381,7 +1388,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         translationResults: remoteState.translation_results || remoteState.translationResults || {},
         ocrQualityReviews: remoteState.ocrQualityReviews || [],
     };
-    const previousLocalCache = window.localStorage.getItem(cacheKey);
+    const previousLocalCache = readProofreadCache(cacheKey);
     const { payload: restoredCache, pendingPages } = mergeNewerLocalCloudState(
       cloudCache, previousLocalCache, project.remoteBookId,
     );
@@ -2130,6 +2137,8 @@ async function deleteHomeProject(project) {
       if (state.activeFolderProjectId === project.id) state.activeFolderProjectId = "";
     } else {
       window.localStorage.removeItem(project.cacheKey);
+      await proofreadFallbackQueue.catch(() => {});
+      if (proofreadFallbackRecords.has(project.cacheKey)) await writeProofreadFallback(project.cacheKey, null);
       await removeStoredSourceFile(project.cacheKey);
       if (window.localStorage.getItem(ACTIVE_PROJECT_KEY) === project.cacheKey) {
         window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
@@ -2262,8 +2271,9 @@ function getHomeProjects() {
     projects.push(activeProject);
   }
 
-  for (let index = 0; index < window.localStorage.length; index += 1) {
-    const key = window.localStorage.key(index);
+  const cacheKeys = new Set(proofreadFallbackRecords.keys());
+  for (let index = 0; index < window.localStorage.length; index += 1) cacheKeys.add(window.localStorage.key(index));
+  for (const key of cacheKeys) {
     if (!key?.startsWith(CACHE_PREFIX)) continue;
     const project = parseCachedProject(key);
     if (!project) continue;
@@ -2299,7 +2309,7 @@ function getActiveHomeProject() {
 
 function parseCachedProject(cacheKey) {
   try {
-    const raw = window.localStorage.getItem(cacheKey);
+    const raw = readProofreadCache(cacheKey);
     if (!raw) return null;
     const payload = JSON.parse(raw);
     const pageCount = Number(payload.pageCount) || 0;
@@ -2754,6 +2764,7 @@ async function loadSamplePdf() {
 }
 
 async function loadFile(file, options = {}) {
+  await initializeProofreadFallback();
   if (state.batchOcr?.running) throw new Error("请先停止批量识别，再加载其他文件。");
   if (!isSupportedSourceFile(file)) {
     throw new Error("只支持 PDF、图片、Markdown、TXT 或 DOCX 文件。");
@@ -2854,7 +2865,7 @@ function newProject() {
   return true;
 }
 
-function deleteCurrentProject() {
+async function deleteCurrentProject() {
   if (state.isOcrBusy || state.isTranslateBusy) {
     setStatus("OCR 或翻译正在运行，请等当前任务结束后再删除项目。", "warn");
     return;
@@ -2876,6 +2887,8 @@ function deleteCurrentProject() {
   }
 
   if (cacheKey) {
+    await proofreadFallbackQueue.catch(() => {});
+    if (proofreadFallbackRecords.has(cacheKey)) await writeProofreadFallback(cacheKey, null);
     window.localStorage.removeItem(cacheKey);
     if (window.localStorage.getItem(ACTIVE_PROJECT_KEY) === cacheKey) {
       window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
@@ -3122,6 +3135,7 @@ function resetDocumentState() {
   state.remoteSavePromise = null;
   state.remotePendingPayload = null;
   state.localCacheQuotaExceeded = false;
+  state.localProofreadSavePending = false;
   state.renderToken += 1;
 
   els.thumbnailList.innerHTML = "";
@@ -3191,11 +3205,83 @@ function sanitizeCachedSourceCoordinates(compare, layoutVersion) {
   };
 }
 
+// Independent durable fallback: never evict proofreading to make localStorage space.
+const proofreadFallbackRecords = new Map();
+let proofreadFallbackQueue = Promise.resolve();
+let proofreadFallbackReady = null;
+let localProofreadSaveSequence = 0;
+function openProofreadFallback() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) return reject(new Error("浏览器不支持校对后备存储"));
+    const request = window.indexedDB.open("tibetan-proofreading-results", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("results");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("无法打开校对后备存储"));
+    request.onblocked = () => reject(new Error("校对后备存储被其他页面占用"));
+  });
+}
+function initializeProofreadFallback() {
+  if (proofreadFallbackReady) return proofreadFallbackReady;
+  proofreadFallbackReady = (async () => {
+    const db = await openProofreadFallback();
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("results", "readonly");
+        const cursor = tx.objectStore("results").openCursor();
+        cursor.onsuccess = () => {
+          const row = cursor.result;
+          if (row) { proofreadFallbackRecords.set(row.key, row.value); row.continue(); }
+        };
+        tx.oncomplete = resolve;
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error("读取校对后备存储失败"));
+      });
+    } finally { db.close(); }
+  })().catch(error => { console.warn("Could not load proofreading fallback", error); });
+  return proofreadFallbackReady;
+}
+function writeProofreadFallback(key, raw) {
+  const operation = proofreadFallbackQueue.catch(() => {}).then(async () => {
+    const db = await openProofreadFallback();
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("results", "readwrite");
+        if (raw === null) tx.objectStore("results").delete(key);
+        else tx.objectStore("results").put(raw, key);
+        tx.oncomplete = resolve;
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error("校对后备存储写入失败"));
+      });
+      if (raw === null) proofreadFallbackRecords.delete(key);
+      else proofreadFallbackRecords.set(key, raw);
+    } finally { db.close(); }
+  });
+  proofreadFallbackQueue = operation;
+  return operation;
+}
+function readProofreadCache(key) {
+  const fallback = proofreadFallbackRecords.get(key);
+  let legacy = null;
+  try { legacy = window.localStorage.getItem(key); } catch (_) { /* fallback remains readable */ }
+  if (!fallback) return legacy;
+  if (!legacy) return fallback;
+  let fallbackPayload, legacyPayload;
+  try { fallbackPayload = JSON.parse(fallback); } catch (_) { return legacy; }
+  try { legacyPayload = JSON.parse(legacy); } catch (_) { return fallback; }
+  if (!fallbackPayload || typeof fallbackPayload !== "object") return legacy;
+  if (!legacyPayload || typeof legacyPayload !== "object") return fallback;
+  return (Date.parse(legacyPayload.updatedAt) || 0) > (Date.parse(fallbackPayload.updatedAt) || 0) ? legacy : fallback;
+}
+function updateLocalProofreadSaveFeedback(pending, failed = false) {
+  for (const status of els.ocrLineCompare?.querySelectorAll?.(".proofread-autosave-status") || []) {
+    status.textContent = pending ? "正在保存到本机…" : failed ? "本机保存失败，请保留页面" : "已保存到本机";
+    status.classList.toggle("is-error", failed);
+  }
+}
+
 function restoreCachedResults(payloadOverride = null) {
   if (!state.cacheKey || !state.pageCount) return false;
 
   try {
-    const raw = payloadOverride ? null : window.localStorage.getItem(state.cacheKey);
+    const raw = payloadOverride ? null : readProofreadCache(state.cacheKey);
     if (!payloadOverride && !raw) return false;
 
     const payload = payloadOverride || JSON.parse(raw);
@@ -3270,19 +3356,42 @@ function saveCachedResults(options = {}) {
       translationResults: serializeResultMap(state.translationResults),
       ocrQualityReviews: state.ocrQualityReviews,
     };
-    const canSaveRemotely = isCloudDeployment() && state.remoteBookId &&
-      !state.remoteRestoreInFlight && state.remoteRestoreComplete;
-    if (!state.localCacheQuotaExceeded || !canSaveRemotely) {
-      try {
-        window.localStorage.setItem(state.cacheKey, JSON.stringify(payload));
-      } catch (error) {
-        if (!canSaveRemotely) throw error;
-        state.localCacheQuotaExceeded = true;
-        console.warn("Browser cache is full; saving proofreading changes to cloud only", error);
-      }
+    const key = state.cacheKey;
+    const serialized = JSON.stringify(payload);
+    const sequence = ++localProofreadSaveSequence;
+    const documentRequestId = state.documentRequestId;
+    try {
+      window.localStorage.setItem(key, serialized);
+      state.localCacheQuotaExceeded = false;
+      state.localProofreadSavePending = false;
+    } catch (error) {
+      state.localCacheQuotaExceeded = true;
+      if (!window.indexedDB) throw error;
+      state.localProofreadSavePending = true;
+      updateLocalProofreadSaveFeedback(true);
+      const pending = writeProofreadFallback(key, serialized).then(async () => {
+        if (state.cacheKey !== key || state.documentRequestId !== documentRequestId || sequence !== localProofreadSaveSequence) return true;
+        if (sequence === localProofreadSaveSequence) {
+          state.localCacheQuotaExceeded = false;
+          state.localProofreadSavePending = false;
+          updateLocalProofreadSaveFeedback(false);
+          setStatus("校对已保存到本机后备存储；云端同步状态请查看协作栏。", "ok");
+        }
+        await scheduleRemoteStateSave(payload, options.immediateRemote);
+        return true;
+      }).catch(error => {
+        console.warn("Failed to persist proofreading fallback", error);
+        if (state.cacheKey === key && state.documentRequestId === documentRequestId && sequence === localProofreadSaveSequence) {
+          state.localProofreadSavePending = false;
+          updateLocalProofreadSaveFeedback(false, true);
+          setStatus("本机校对保存失败：修改仅保留在当前页面，请勿刷新，请先导出备份。", "error");
+        }
+        return false;
+      });
+      return pending;
     }
     const remoteSave = scheduleRemoteStateSave(payload, options.immediateRemote);
-    if (!els.homeView.hidden) renderHomeDashboard();
+    if (els.homeView && !els.homeView.hidden) renderHomeDashboard();
     return remoteSave ?? true;
   } catch (error) {
     console.warn("Failed to save cached OCR state", error);
@@ -3432,7 +3541,7 @@ async function retryCollaborationSync() {
     state.remoteRestoreComplete = true;
     const saved = saveCachedResults({ immediateRemote: true });
     if (saved === false) throw new Error("当前修改未能保存，请保持页面打开并重试。");
-    await saved;
+    if (await saved === false) throw new Error("本机后备存储保存失败，请保留页面并导出备份。");
     if (!state.remoteRestoreComplete) return;
     els.collabRetrySync.hidden = true;
     if (els.sourceRetryButton) {
@@ -6542,7 +6651,7 @@ function showProofreadAutoSaveStatus(index, saved) {
     .find((item) => Number(item.dataset.proofreadBlock) === index);
   const status = card?.querySelector(".proofread-autosave-status");
   if (!status) return;
-  status.textContent = saved ? "已自动保存" : "保存失败，请重试";
+  status.textContent = state.localProofreadSavePending ? "正在保存到本机…" : saved ? "已保存到本机" : "保存失败，请重试";
   status.classList.toggle("is-error", !saved);
 }
 
