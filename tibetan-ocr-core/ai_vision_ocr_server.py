@@ -19,6 +19,7 @@ import mimetypes
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from io import BytesIO
@@ -1762,7 +1763,7 @@ def call_model_aggregator_gemini_page(image_bytes: bytes, filename: str, prompt:
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": image_data_url(image_bytes, filename)}},
         ]}],
-    }, AGGREGATOR_API_KEY, timeout=GEMINI_OCR_TIMEOUT)
+    }, AGGREGATOR_API_KEY, timeout=min(GEMINI_OCR_TIMEOUT, 90))
     if not raw.get("ok"):
         raise RuntimeError(f"Gemini 整页复核失败：{redact_sensitive(str(raw.get('error') or '模型调用失败'))}")
     resolved = str(raw.get("modelRef") or raw.get("model") or "").strip()
@@ -1784,7 +1785,10 @@ def call_gemini_page_review(image_bytes: bytes, filename: str, rows: list, model
         if model == GEMINI_REVIEW_MODELS[0]:
             candidates.extend(candidate for candidate in GEMINI_REVIEW_MODELS[1:] if candidate != model)
         failures = []
+        started_at = time.monotonic()
         for candidate in candidates:
+            if failures and time.monotonic() - started_at > 60:
+                break
             try:
                 result = call_model_aggregator_gemini_page(image_bytes, filename, prompt, candidate)
                 response_text = str(result.get("text") or "")

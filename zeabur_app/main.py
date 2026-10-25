@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.concurrency import run_in_threadpool
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -645,7 +646,7 @@ async def ai_ocr(
     model: str = Form(""),
 ) -> dict[str, Any]:
     try:
-        return call_ai_ocr(await file.read(), file.filename or "page.png", ocr_text, prompt, model)
+        return await run_in_threadpool(call_ai_ocr, await file.read(), file.filename or "page.png", ocr_text, prompt, model)
     except RuntimeError as exc:
         detail = load_ai_ocr_module().redact_sensitive(str(exc))
         status = 422 if "blockReason=" in detail else 504 if "timed out" in detail.lower() else 502
@@ -686,7 +687,7 @@ async def ai_page_review(
     if provider not in {"gemini", "qwen"}:
         raise HTTPException(404, "未知的复核模型")
     try:
-        return call_ai_page_review(provider, await file.read(), file.filename or "page.png", json.loads(rows), model)
+        return await run_in_threadpool(call_ai_page_review, provider, await file.read(), file.filename or "page.png", json.loads(rows), model)
     except (ValueError, KeyError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 

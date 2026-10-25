@@ -6692,7 +6692,7 @@ function renderReviewModelSelector(provider, index, onCatalog = null) {
 }
 
 function getSelectedGeminiModel() {
-  return REVIEW_MODEL_DEFAULTS.gemini[0];
+  return REVIEW_MODEL_DEFAULTS.gemini[1] || REVIEW_MODEL_DEFAULTS.gemini[0];
 }
 
 function updateGeminiRowRecognizeButton(select) {
