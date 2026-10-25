@@ -7684,8 +7684,7 @@ function updateManualEditTracking(target, nextText, baselineText = target?.manua
     tokenizeOcrDiffText(baseline).map((token) => token.value),
     tokenizeOcrDiffText(normalized).map((token) => token.value),
   );
-  const changedRange = getChangedTextRange(baseline, normalized);
-  target.manualEditRanges = changedRange ? [changedRange] : [];
+  target.manualEditRanges = getChangedTextRanges(baseline, normalized);
   target.manuallyEdited = true;
   return target;
 }
@@ -7694,8 +7693,7 @@ function getManualEditRanges(target) {
   if (!target || typeof target !== "object") return [];
   const text = String(target.text || "");
   if (target.manuallyEdited && typeof target.manualBaselineText === "string") {
-    const changedRange = getChangedTextRange(target.manualBaselineText, text);
-    return changedRange ? [changedRange] : [];
+    return getChangedTextRanges(target.manualBaselineText, text);
   }
   if (Array.isArray(target.manualEditRanges)) {
     return expandTextRangesToClusters(target.manualEditRanges, text);
@@ -7717,6 +7715,35 @@ function expandTextRangesToClusters(ranges, text) {
     return { start, end };
   }).filter((range) => range.end > range.start);
   return normalizeTextRanges(expanded);
+}
+
+// Align grapheme clusters so unchanged text between edits never turns green.
+// Deletions affect the edit count but have no surviving glyph to highlight.
+function getChangedTextRanges(previous, next) {
+  const before = tokenizeTextRangeClusters(previous);
+  const after = tokenizeTextRangeClusters(next);
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix].value === after[prefix].value) prefix++;
+  let aEnd = before.length, bEnd = after.length;
+  while (aEnd > prefix && bEnd > prefix && before[aEnd - 1].value === after[bEnd - 1].value) { aEnd--; bEnd--; }
+  const n = aEnd - prefix, m = bEnd - prefix;
+  if (!m) return [];
+  const costs = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
+  for (let i = 0; i <= n; i++) costs[i][0] = i;
+  for (let j = 0; j <= m; j++) costs[0][j] = j;
+  for (let i = 1; i <= n; i++) for (let j = 1; j <= m; j++) {
+    costs[i][j] = Math.min(costs[i - 1][j] + 1, costs[i][j - 1] + 1,
+      costs[i - 1][j - 1] + (before[prefix + i - 1].value === after[prefix + j - 1].value ? 0 : 1));
+  }
+  const changed = [];
+  let i = n, j = m;
+  while (i || j) {
+    if (i && j && before[prefix + i - 1].value === after[prefix + j - 1].value && costs[i][j] === costs[i - 1][j - 1]) { i--; j--; }
+    else if (i && j && costs[i][j] === costs[i - 1][j - 1] + 1) { changed.push(after[prefix + j - 1]); i--; j--; }
+    else if (j && costs[i][j] === costs[i][j - 1] + 1) { changed.push(after[prefix + j - 1]); j--; }
+    else i--;
+  }
+  return normalizeTextRanges(changed.map(({start, end}) => ({start, end})));
 }
 
 function getChangedTextRange(previous, next) {
