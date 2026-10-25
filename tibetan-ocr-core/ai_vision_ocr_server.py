@@ -2017,9 +2017,9 @@ def call_vision_model(
                 except RuntimeError as exc:
                     errors.append(f"{candidate}: {exc}")
                     detail = str(exc).lower()
-                    if not any(marker in detail for marker in ("http 429", "http 503", "high demand")):
+                    if not any(marker in detail for marker in ("http 429", "http 503", "high demand", "blockreason=other")):
                         raise
-            raise RuntimeError("Gemini OCR 候选模型均暂时拥堵或限流：" + "；".join(errors))
+            raise RuntimeError("Gemini OCR 候选模型均未返回有效文字：" + "；".join(errors))
         result = call_openai_compatible_images([(image_bytes, filename)], prompt, model_override=model)
         if result.get("model") not in {model, f"gemini:{model}"}:
             raise RuntimeError("Gemini OCR 响应模型与所选模型不一致，结果未采用。")
