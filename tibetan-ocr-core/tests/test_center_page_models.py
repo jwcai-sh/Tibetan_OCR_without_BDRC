@@ -24,6 +24,7 @@ class CenterPageModels(unittest.TestCase):
              patch.object(server, 'prepare_line_review_images') as crop:
             result = server.call_gemini_page_review(b'original-page', 'page.png', ROWS, 'gemini-2.5-flash')
         self.assertTrue(request.call_args.args[0].endswith('/api/aggregate/chat'))
+        self.assertEqual(request.call_args.kwargs['timeout'],server.GEMINI_OCR_TIMEOUT)
         body = request.call_args.args[1]
         self.assertEqual(body['model'], 'gemini:gemini-2.5-flash')
         self.assertIn('b3JpZ2luYWwtcGFnZQ==', body['messages'][0]['content'][1]['image_url']['url'])

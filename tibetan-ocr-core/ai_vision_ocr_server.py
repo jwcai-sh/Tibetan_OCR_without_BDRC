@@ -1774,7 +1774,7 @@ def call_model_aggregator_gemini_page(image_bytes: bytes, filename: str, prompt:
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": image_data_url(image_bytes, filename)}},
         ]}],
-    }, AGGREGATOR_API_KEY, timeout=min(GEMINI_OCR_TIMEOUT, 90))
+    }, AGGREGATOR_API_KEY, timeout=GEMINI_OCR_TIMEOUT)
     upstream = raw.get("raw") or {}
     feedback = (upstream.get("promptFeedback") or {}) if isinstance(upstream, dict) else {}
     if feedback.get("blockReason"):
