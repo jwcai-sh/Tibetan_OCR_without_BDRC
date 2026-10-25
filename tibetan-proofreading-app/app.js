@@ -4264,8 +4264,10 @@ function hasValidPageOcr(result) {
 
 function hasValidGeminiPageOcr(result) {
   const side = getOcrSourceCompare(result)?.llm;
-  return Boolean(side && !side.error && isCurrentGeminiResult(side)
-    && (side.lines || []).some((line) => !line.deleted && !line.error && !line.diagnostic
+  const activeLines = (side?.lines || []).filter((line) => !line.deleted);
+  return Boolean(side && !side.error && Number(result?.raw?.failed_line_count || 0) === 0
+    && isCurrentGeminiResult(side) && activeLines.length
+    && activeLines.every((line) => !line.error && !line.diagnostic
       && !isMissingOcrTranscription(line) && /[\u0f00-\u0fff0-9]/.test(String(line.text || ""))));
 }
 
