@@ -67,3 +67,19 @@ context.window = {setInterval:()=>0};
 context.initializeGeminiJobs();
 assert.equal(vm.runInContext('geminiBackgroundJobs[0].result.text', context),'new model candidate','Refresh restores saved candidate');
 console.log('Polling only retrieves results; refresh restores task records.');
+
+// Cloud PDFs submit only a source reference; the server uses the same DPI/PNG.
+vm.runInContext('geminiBackgroundJobs = [];',context);
+state.remoteServerPdf=true; state.remoteBookId='c'.repeat(32);
+context.els={dpiInput:{value:'260'}};
+context.getCurrentPageImageBlob=async()=>{throw new Error('must not download/re-upload cloud original');};
+context.fetch=async(url,options)=>{
+  assert.equal(options.body.has('file'),false);
+  assert.equal(options.body.get('book_id'),state.remoteBookId);
+  assert.equal(options.body.get('page_num'),'3');
+  assert.equal(options.body.get('dpi'),'260');
+  return {ok:true,status:202,json:async()=>({status:'queued'})};
+};
+await context.reRecognizeGeminiRow(0,{value:'gemini-3.8-flash'},{bbox:{}},{});
+assert.equal(vm.runInContext('geminiBackgroundJobs[0].status',context),'queued');
+console.log('Cloud original reference avoids image transfer and preserves DPI.');

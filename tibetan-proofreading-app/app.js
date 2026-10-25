@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261025-background-line-v15";
+const APP_BUILD_ID = "20261025-cloud-original-v16";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -7052,8 +7052,10 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
   // Lock only while capturing the current original, not while the model runs.
   pageReviewPending = true; setBusy(true);
   let blob;
+  const cloudOriginal = state.remoteServerPdf && state.remoteBookId
+    ? {bookId:state.remoteBookId, page:job.page, dpi:Number(els.dpiInput.value) || 260} : null;
   try {
-    blob = await getCurrentPageImageBlob();
+    if (!cloudOriginal) blob = await getCurrentPageImageBlob();
     if (!geminiJobMatchesPage(job)) throw new Error("页面已切换，请重新提交");
   } catch (error) {
     job.status = "failed"; job.error = String(error.message || error);
@@ -7061,7 +7063,12 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
   } finally { pageReviewPending = false; setBusy(false); }
   job.status = "submitting"; persistGeminiJobs(); renderGeminiJobs();
   const form = new FormData();
-  form.append("file", blob, "original-page.png"); form.append("bbox", JSON.stringify(bbox));
+  if (cloudOriginal) {
+    form.append("book_id", cloudOriginal.bookId);
+    form.append("page_num", String(cloudOriginal.page));
+    form.append("dpi", String(cloudOriginal.dpi));
+  } else form.append("file", blob, "original-page.png");
+  form.append("bbox", JSON.stringify(bbox));
   form.append("job_id", job.id); form.append("model", job.model);
   form.append("ocr_text", compare?.llm?.lines[index]?.text || "");
   form.append("region_id", source?.regionId || "center");

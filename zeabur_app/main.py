@@ -697,17 +697,26 @@ line_review_jobs_lock = threading.Lock()
 LINE_REVIEW_JOB_TTL = 3600
 
 
+def run_cloud_line_review(book_id, page_num, dpi, bbox, ocr_text, model, region_id):
+    # Use the identical lossless renderer used for browser OCR originals.
+    # Render inside the worker so accepting a job never waits for OSS or PDF work.
+    original = get_book_page_preview(book_id, page_num, dpi, "png")
+    return call_ai_line_review(original.body, "original-page.png", bbox, ocr_text, model, region_id, 180.0)
+
+
 @app.post("/api/line-review/jobs")
 async def submit_line_review_job(
-    request: Request, file: UploadFile = File(...), bbox: str = Form(...),
+    request: Request, bbox: str = Form(...), file: UploadFile | None = File(None),
     job_id: str = Form(...), ocr_text: str = Form(""), model: str = Form(""),
-    region_id: str = Form(""),
+    region_id: str = Form(""), book_id: str = Form(""), page_num: int = Form(0), dpi: int = Form(260),
 ) -> Response:
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise HTTPException(400, "任务编号无效")
     actor = getattr(request.state, "collaborator", "")
-    image = await file.read(MAX_UPLOAD_BYTES + 1)
-    if not image or len(image) > MAX_UPLOAD_BYTES:
+    if book_id and (file is not None or not re.fullmatch(r"[a-f0-9]{32}", book_id) or page_num < 1 or not 72 <= dpi <= 360):
+        raise HTTPException(400, "云端原页参数无效")
+    image = await file.read(MAX_UPLOAD_BYTES + 1) if file else b""
+    if not book_id and (not image or len(image) > MAX_UPLOAD_BYTES):
         raise HTTPException(400, "原页图片为空或超过上传限制")
     # Validate before queuing a potentially billable request.
     module = load_ai_ocr_module()
@@ -730,10 +739,13 @@ async def submit_line_review_job(
                 raise HTTPException(429, "后台识别任务较多，请稍后提交")
             if len(line_review_jobs) >= 100:
                 raise HTTPException(429, "后台任务记录已满，请稍后提交")
-            future = line_review_executor.submit(
-                call_ai_line_review, image, file.filename or "page.png", bbox,
-                ocr_text, model, region_id, 180.0,
-            )
+            if book_id:
+                future = line_review_executor.submit(run_cloud_line_review, book_id, page_num, dpi, bbox, ocr_text, model, region_id)
+            else:
+                future = line_review_executor.submit(
+                    call_ai_line_review, image, file.filename or "page.png", bbox,
+                    ocr_text, model, region_id, 180.0,
+                )
             line_review_jobs[job_id] = (future, actor, now)
     return JSONResponse({"status": "queued", "job_id": job_id}, status_code=202)
 

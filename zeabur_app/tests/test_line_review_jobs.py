@@ -58,6 +58,36 @@ class LineReviewJobsTest(unittest.TestCase):
         self.assertEqual(self.submit(model='different-model').status_code, 400)
         self.assertFalse(self.calls)
 
+    def test_cloud_original_renders_in_worker_without_upload(self):
+        render_started = threading.Event()
+        render_release = threading.Event()
+        def render(*args):
+            render_started.set()
+            render_release.wait(2)
+            return SimpleNamespace(body=b'lossless-original-png')
+        with patch.object(main, 'get_book_page_preview', side_effect=render) as renderer:
+            response = self.client.post('/api/line-review/jobs', data={
+                'job_id':'b'*32, 'book_id':'c'*32, 'page_num':3, 'dpi':260,
+                'model':'gemini-3.8-flash', 'bbox':'{}',
+            })
+            self.assertEqual(response.status_code, 202)
+            self.assertTrue(render_started.wait(1))
+            self.assertFalse(self.calls)
+            render_release.set()
+            self.assertTrue(self.started.wait(1))
+            self.release.set()
+            main.line_review_jobs['b'*32][0].result(2)
+            renderer.assert_called_once_with('c'*32, 3, 260, 'png')
+            self.assertEqual(self.calls[0][0], b'lossless-original-png')
+
+    def test_invalid_cloud_reference_never_calls_provider(self):
+        response = self.client.post('/api/line-review/jobs', data={
+            'job_id':'b'*32, 'book_id':'../other', 'page_num':3,
+            'model':'gemini-3.8-flash', 'bbox':'{}',
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(self.calls)
+
     def test_failure_is_terminal_not_resubmitted(self):
         with patch.object(main, 'call_ai_line_review', side_effect=RuntimeError('upstream timeout')):
             self.assertEqual(self.submit().status_code, 202)
