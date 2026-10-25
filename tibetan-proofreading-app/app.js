@@ -3312,15 +3312,24 @@ async function flushRemoteStateSaves() {
       const changedPages = findChangedRemotePages(payload, state.remotePageSnapshots);
       if (!changedPages.length) continue;
       try {
+        const { ocrResults, translationResults, ocrQualityReviews, ...metadata } = payload;
+        const changed = new Set(changedPages);
+        const pickPages = (results) => Object.fromEntries(changedPages
+          .filter((page) => Object.prototype.hasOwnProperty.call(results || {}, page))
+          .map((page) => [page, results[page]]));
+        const pageReviews = Array.isArray(ocrQualityReviews)
+          ? ocrQualityReviews.filter((row) => changed.has(String(row.pageNum ?? row.page_num)))
+          : pickPages(ocrQualityReviews);
         const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
+          signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(90000) : undefined,
           body: JSON.stringify({
-            ...payload,
+            ...metadata,
             book_id: bookId,
-            ocr_results: payload.ocrResults,
-            translation_results: payload.translationResults,
+            ocr_results: pickPages(ocrResults),
+            translation_results: pickPages(translationResults),
+            ocrQualityReviews: pageReviews,
             base_page_revisions: state.remotePageRevisions || {},
             changed_pages: changedPages,
           }),
@@ -4327,11 +4336,18 @@ async function runOcrForRemainingPages() {
       try {
         await goToPage(page, { batch: true });
         await runOcrForCurrentPage({ skipBusy: true, skipPageSync: true, mode: getOcrMode() });
+        if (isCloudDeployment() && state.remoteBookId && !state.remoteRestoreComplete) {
+          throw new Error("本机识别结果已保留，但云端同步失败；请重试云端校对状态后再继续批量识别。");
+        }
         if (!hasValidGeminiPageOcr(state.ocrResults.get(page))) throw new Error("未返回有效 Gemini OCR 文字");
         await saveCachedResults({ immediateRemote: true });
+        if (isCloudDeployment() && state.remoteBookId && !state.remoteRestoreComplete) {
+          throw new Error("本机识别结果已保留，但云端同步失败；请重试云端校对状态后再继续批量识别。");
+        }
         job.success.push(page);
       } catch (error) {
         job.failed.push({ page, error: String(error.message || error) });
+        if (isCloudDeployment() && state.remoteBookId && !state.remoteRestoreComplete) job.cancelled = true;
       }
       updateBatchOcrProgress();
     }
@@ -4345,7 +4361,9 @@ async function runOcrForRemainingPages() {
     }
     refreshControls();
     updateBatchOcrProgress();
-    setStatus(`批量${job.cancelled ? "已停止" : "完成"}：成功 ${job.success.length} 页，失败 ${job.failed.length} 页。已完成结果已保存。`, job.failed.length ? "warn" : "ok");
+    setStatus(job.cancelled && isCloudDeployment() && !state.remoteRestoreComplete
+      ? `批量已停止：云端同步失败。本机结果已保留，请重试云端校对状态；本轮成功 ${job.success.length} 页、失败 ${job.failed.length} 页。`
+      : `批量${job.cancelled ? "已停止" : "完成"}：成功 ${job.success.length} 页，失败 ${job.failed.length} 页。已完成结果已保存。`, job.failed.length ? "warn" : "ok");
   }
 }
 
