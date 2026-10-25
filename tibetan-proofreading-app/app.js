@@ -7814,7 +7814,7 @@ function createModelInputPreview(sourceLine, index) {
     } catch (error) {
       if (!wrapper.isConnected) return;
       if (String(error.message || "").includes("原文物理行数与识别 block 数不一致")) {
-        const approximate = createSourceBlockPreviewCanvas(sourceLine);
+        const approximate = createSourceBlockPreviewCanvas(sourceLine, true);
         if (approximate) {
           const note = document.createElement("small");
           note.textContent = "识别 block 与原文物理行数不同；显示本 block 的坐标区域，请对照左栏整页核对。";
@@ -7866,9 +7866,14 @@ function mergeDuplicateSourcePreviews(root) {
   }
 }
 
-function createSourceBlockPreviewCanvas(sourceLine) {
+function createSourceBlockPreviewCanvas(sourceLine, allowHiddenSource = false) {
   const bbox = normalizeBbox(sourceLine?.bbox);
-  const source = getVisibleSourceElement();
+  const source = getVisibleSourceElement() || (allowHiddenSource
+    ? [els.imagePage, els.pdfCanvas].find((candidate) => candidate && (
+      candidate instanceof HTMLCanvasElement ? candidate.width && candidate.height
+        : candidate.naturalWidth && candidate.naturalHeight
+    ))
+    : null);
   if (!bbox || !source) return null;
 
   const sourceWidth = source instanceof HTMLCanvasElement ? source.width : source.naturalWidth;
