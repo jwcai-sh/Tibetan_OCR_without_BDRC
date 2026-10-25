@@ -258,6 +258,7 @@ window.addEventListener("DOMContentLoaded", () => {
   updateSummary();
   updateTranslationSummary();
   void Promise.all([cloudLibraryReady, localCacheReady]).then(() => {
+    if (els.homeView && !els.homeView.hidden) renderHomeDashboard();
     if (cloudLibrary.authMode !== "unknown") restoreRouteFromLocation();
   });
   window.addEventListener("popstate", restoreRouteFromLocation);
