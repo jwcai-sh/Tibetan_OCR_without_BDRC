@@ -7701,7 +7701,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
 // changes the archived image that a model actually received.
 async function getSourceLinePreviewCrop(sourceLine, index, context) {
   const key = JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v3"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v4"]);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Render without a persistent cache. */ }
   if (cached?.payload?.review_image?.crop_version === 26 && cached.payload.images?.length) return cached;
@@ -7724,9 +7724,25 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
       if (sourceLineCount > 0) data.append("physical_row_count", String(sourceLineCount));
     }
     const endpoint = context.endpoint.replace(/line-review$/, "line-preview");
-    const response = await fetch(endpoint, { method: "POST", body: data });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || payload.detail || `HTTP ${response.status}`);
+    let response = await fetch(endpoint, { method: "POST", body: data });
+    let payload = await response.json();
+    let approximateRowMatch = false;
+    let approximateAttempt = false;
+    if (!response.ok && String(payload.error || payload.detail || "").includes("原文物理行数与识别 block 数不一致")) {
+      // A model block number cannot be used as a physical-row index here.
+      // Use its position to find the nearest detected row instead.
+      data.delete("physical_row_index");
+      data.delete("physical_row_count");
+      approximateAttempt = true;
+      response = await fetch(endpoint, { method: "POST", body: data });
+      payload = await response.json();
+      approximateRowMatch = response.ok && Number.isInteger(payload.review_image?.source_bbox?.physical_row_index);
+      if (response.ok && !approximateRowMatch) throw new Error("原文物理行数与识别 block 数不一致，且无法按坐标定位物理行");
+    }
+    if (!response.ok) throw new Error(approximateAttempt
+      ? `原文物理行数与识别 block 数不一致，无法按坐标定位物理行：${payload.error || payload.detail || `HTTP ${response.status}`}`
+      : payload.error || payload.detail || `HTTP ${response.status}`);
+    if (approximateRowMatch) payload.approximateRowMatch = true;
     if (payload.review_image?.crop_version !== 26 || !payload.images?.length) {
       throw new Error("单行原文裁剪格式无效");
     }
@@ -7823,7 +7839,9 @@ function createModelInputPreview(sourceLine, index) {
       if (!wrapper.isConnected || pageNum !== state.pageNum || sourceKey !== state.cacheKey) return;
       wrapper.replaceChildren();
       const note = document.createElement("small");
-      note.textContent = "单行原文裁剪，仅供人工对照；模型识别使用整页原图";
+      note.textContent = payload.approximateRowMatch
+        ? "识别 block 数与原文行数不同；按本 block 坐标就近定位此原文行，请人工核对。"
+        : "单行原文裁剪，仅供人工对照；模型识别使用整页原图";
       wrapper.appendChild(note);
       const strip = document.createElement("div");
       strip.style.display = "flex";
