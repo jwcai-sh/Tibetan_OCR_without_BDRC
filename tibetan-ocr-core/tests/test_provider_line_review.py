@@ -153,7 +153,7 @@ class ProviderReviewTests(unittest.TestCase):
 
     def test_gemini_override_is_request_scoped_no_fallback(self):
         captured = []
-        def upstream(url, body, key):
+        def upstream(url, body, key, timeout=None):
             if url.endswith('/upload'):
                 return {'ok': True, 'id': 'test-image'}
             captured.append(body)

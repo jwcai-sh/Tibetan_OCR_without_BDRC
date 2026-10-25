@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261025-job-status-v17";
+const APP_BUILD_ID = "20261025-whole-page-v18";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -6918,7 +6918,13 @@ function geminiJobRowSnapshot(result, index) {
 }
 
 function geminiJobCanApply(job) {
-  return geminiJobMatchesPage(job) && geminiJobRowSnapshot(state.ocrResults.get(state.pageNum), job.index) === job.baseline;
+  const result = state.ocrResults.get(state.pageNum);
+  const compare = getOcrSourceCompare(result);
+  const line = compare?.llm?.lines[job.index];
+  const protectedLine = line?.deleted || line?.manuallyEdited || line?.manualErrorChars > 0 ||
+    line?.manualEditRanges?.length || line?.errorRanges?.length ||
+    (compare?.sharedErrors || []).some(mark => mark.blockIndex === job.index && mark.llmRanges?.length);
+  return !protectedLine && geminiJobMatchesPage(job) && geminiJobRowSnapshot(result, job.index) === job.baseline;
 }
 
 function renderGeminiJobs() {
@@ -6935,21 +6941,24 @@ function renderGeminiJobs() {
     row.style.cssText = "padding:10px 16px;border-bottom:1px solid #dce5df";
     const label = document.createElement("div");
     const names = {preparing:"准备原页图片", submitting:"正在提交", uncertain:"正在确认提交状态", queued:"后台排队中，可继续校对", running:"后台识别中，可继续校对", completed:"识别完成，等待你应用", failed:"识别未完成", applied:"已应用到 Gemini 候选"};
-    label.textContent = `第 ${job.page} 页第 ${job.index + 1} 行 · ${job.model} · ${names[job.status] || job.status}`;
+    label.textContent = `第 ${job.page} 页${job.rows ? "整页识别、分行候选" : `第 ${job.index + 1} 行`} · ${job.model} · ${names[job.status] || job.status}`;
     row.append(label);
     if (job.error) {
       const note = document.createElement("div"); note.textContent = job.error; row.append(note);
     }
     if (job.status === "completed") {
-      const text = document.createElement("textarea");
-      text.readOnly = true; text.value = job.result.text;
-      text.setAttribute("aria-label", `第 ${job.page} 页第 ${job.index + 1} 行后台识别候选`);
-      text.style.cssText = "display:block;width:100%;min-height:70px;font-size:20px;margin:8px 0";
-      row.append(text);
+      for (const candidate of job.result.lines || [{index:job.index, text:job.result.text}]) {
+        const title = document.createElement("div"); title.textContent = `第 ${candidate.index + 1} 行`;
+        const text = document.createElement("textarea");
+        text.readOnly = true; text.value = candidate.text;
+        text.setAttribute("aria-label", `第 ${job.page} 页第 ${candidate.index + 1} 行后台识别候选`);
+        text.style.cssText = "display:block;width:100%;min-height:70px;font-size:20px;margin:8px 0";
+        row.append(title, text);
+      }
       const apply = document.createElement("button");
       apply.type = "button"; apply.className = "ghost-button compact";
       apply.disabled = !geminiJobCanApply(job);
-      apply.textContent = !geminiJobMatchesPage(job) ? `返回第 ${job.page} 页后应用` : !geminiJobCanApply(job) ? "该行已修改，请复制候选手动核对" : "应用到 Gemini 候选（保留已采用校对文本）";
+      apply.textContent = !geminiJobMatchesPage(job) ? `返回第 ${job.page} 页后应用` : !geminiJobCanApply(job) ? "该行有校对或标记，请手动核对候选" : `仅应用第 ${job.index + 1} 行候选（保留已采用校对文本）`;
       apply.onclick = () => { void applyGeminiJob(job); };
       row.append(apply);
     }
@@ -6986,7 +6995,19 @@ async function pollGeminiJobs() {
             job.status = "failed"; // Invalid model/text must become terminal, never silently applied.
             const text = normalizeOcrTextSpacing(validateIndependentReviewText(payload.result?.text || ""));
             if (String(payload.result?.model || "").split(":").pop() !== job.model) throw new Error("返回模型与所选模型不一致，原结果保留。");
-            job.result = {text, model: payload.result.model}; job.status = "completed";
+            let lines;
+            if (job.rows) {
+              lines = payload.result.lines;
+              const expected = new Set(job.rows.map(row => row.index));
+              if (!Array.isArray(lines) || lines.length !== expected.size ||
+                  new Set(lines.map(row => row.index)).size !== expected.size ||
+                  lines.some(row => !expected.has(row.index) || typeof row.text !== "string" || !row.text.trim())) {
+                throw new Error("整页分行结果不完整，原校对内容保留。");
+              }
+              lines = lines.map(row => ({index:row.index, text:normalizeOcrTextSpacing(validateIndependentReviewText(row.text))}));
+            }
+            job.result = {text:lines ? lines.find(row => row.index === job.index).text : text,
+              model:payload.result.model, ...(lines ? {lines} : {})}; job.status = "completed";
           } else if (payload.status === "failed") {
             job.status = "failed"; job.error = payload.error || "后台识别失败，原结果保留";
           } else if (["queued", "running"].includes(payload.status)) job.status = payload.status;
@@ -7044,7 +7065,14 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
     setStatus("该行已有后台任务，请查看后台识别列表，避免重复调用。", "warn"); return;
   }
   if (geminiBackgroundJobs.length >= 20) { setStatus("请先关闭已完成或失败的后台任务提示。", "warn"); return; }
+  const rows = (compare?.llm?.lines || []).map((line, rowIndex) => ({
+    index:rowIndex, bbox:normalizeBbox(rowIndex === index ? bbox : line.bbox), region_id:line.regionId || "center",
+  })).filter(row => row.region_id === "center");
+  if (!rows.length || rows.some(row => !row.bbox) || !rows.some(row => row.index === index)) {
+    setStatus("整页分行坐标尚不完整，原结果保留；请先加载整页原文。", "warn"); return;
+  }
   const job = {
+    rows,
     id: crypto.randomUUID().replaceAll("-", ""), actor: cloudLibrary.actor, endpoint,
     sourceKey: state.cacheKey, page: state.pageNum, index, model: select.value,
     baseline: geminiJobRowSnapshot(result, index), created: Date.now(), status:"preparing",
@@ -7071,6 +7099,7 @@ async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
   } else form.append("file", blob, "original-page.png");
   form.append("bbox", JSON.stringify(bbox));
   form.append("job_id", job.id); form.append("model", job.model);
+  form.append("rows", JSON.stringify(job.rows));
   form.append("ocr_text", compare?.llm?.lines[index]?.text || "");
   form.append("region_id", source?.regionId || "center");
   try {

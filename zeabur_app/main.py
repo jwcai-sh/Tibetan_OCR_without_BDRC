@@ -697,10 +697,12 @@ line_review_jobs_lock = threading.Lock()
 LINE_REVIEW_JOB_TTL = 3600
 
 
-def run_cloud_line_review(book_id, page_num, dpi, bbox, ocr_text, model, region_id):
+def run_cloud_line_review(book_id, page_num, dpi, bbox, ocr_text, model, region_id, rows=None):
     # Use the identical lossless renderer used for browser OCR originals.
     # Render inside the worker so accepting a job never waits for OSS or PDF work.
     original = get_book_page_preview(book_id, page_num, dpi, "png")
+    if rows:
+        return call_ai_page_review("gemini", original.body, "original-page.png", rows, model)
     return call_ai_line_review(original.body, "original-page.png", bbox, ocr_text, model, region_id, 180.0)
 
 
@@ -709,6 +711,7 @@ async def submit_line_review_job(
     request: Request, bbox: str = Form(...), file: UploadFile | None = File(None),
     job_id: str = Form(...), ocr_text: str = Form(""), model: str = Form(""),
     region_id: str = Form(""), book_id: str = Form(""), page_num: int = Form(0), dpi: int = Form(260),
+    rows: str = Form(""),
 ) -> Response:
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
         raise HTTPException(400, "任务编号无效")
@@ -726,6 +729,12 @@ async def submit_line_review_job(
         raise HTTPException(400, "原文坐标无效") from exc
     if model.removeprefix("gemini:") not in module.GEMINI_REVIEW_MODELS:
         raise HTTPException(400, "所选 Gemini 模型不在允许列表中")
+    targets = None
+    if rows:
+        try:
+            targets = module.normalize_center_page_rows(json.loads(rows))
+        except (RuntimeError, ValueError, TypeError) as exc:
+            raise HTTPException(400, "整页分行坐标无效") from exc
     now = time.monotonic()
     with line_review_jobs_lock:
         for key, (future, _, created) in list(line_review_jobs.items()):
@@ -740,7 +749,9 @@ async def submit_line_review_job(
             if len(line_review_jobs) >= 100:
                 raise HTTPException(429, "后台任务记录已满，请稍后提交")
             if book_id:
-                future = line_review_executor.submit(run_cloud_line_review, book_id, page_num, dpi, bbox, ocr_text, model, region_id)
+                future = line_review_executor.submit(run_cloud_line_review, book_id, page_num, dpi, bbox, ocr_text, model, region_id, targets)
+            elif targets:
+                future = line_review_executor.submit(call_ai_page_review, "gemini", image, file.filename or "page.png", targets, model)
             else:
                 future = line_review_executor.submit(
                     call_ai_line_review, image, file.filename or "page.png", bbox,
@@ -763,7 +774,7 @@ def get_line_review_job(request: Request, job_id: str) -> dict[str, Any]:
         return {"status": "running" if future.running() else "queued"}
     try:
         result = future.result()
-        return {"status": "completed", "result": {"text": result.get("text", ""), "model": result.get("model", "")}}
+        return {"status": "completed", "result": {"text": result.get("text", ""), "model": result.get("model", ""), **({"lines": result["lines"], "recognition_scope": "whole-page"} if result.get("lines") and result.get("recognition_scope") == "whole-page" else {})}}
     except Exception as exc:
         detail = load_ai_ocr_module().redact_sensitive(str(exc))
         return {"status": "failed", "error": detail[:500] or "后台识别失败，原校对内容保留"}

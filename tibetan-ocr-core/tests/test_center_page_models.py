@@ -45,6 +45,24 @@ class CenterPageModels(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '未完整结束'):
                 server.call_model_aggregator_gemini_page(b'original-page', 'page.png', 'prompt', 'gemini-2.5-flash')
 
+    def test_explicit_38_never_falls_back_after_refusal(self):
+        with patch.object(server, 'USE_MODEL_AGGREGATOR', True), patch.object(server,
+                'call_model_aggregator_gemini_page', side_effect=RuntimeError('blockReason=OTHER')) as request:
+            with self.assertRaisesRegex(RuntimeError, 'blockReason=OTHER'):
+                server.call_gemini_page_review(b'original', 'page.png', ROWS, 'gemini-3.8-flash')
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(request.call_args.args[-1], 'gemini-3.8-flash')
+
+    def test_feedback_and_actual_model_are_checked(self):
+        for raw, message in [
+            ({'promptFeedback':{'blockReason':'OTHER', 'blockReasonMessage':'provider diagnostic'}}, 'provider diagnostic'),
+            ({'modelVersion':'gemini-3.1-flash-lite'}, '实际模型'),
+        ]:
+            with patch.object(server, 'post_json', return_value={'ok':True,
+                    'modelRef':'gemini:gemini-3.8-flash', 'answer':TRANSCRIPT, 'raw':raw}):
+                with self.assertRaisesRegex(RuntimeError, message):
+                    server.call_model_aggregator_gemini_page(b'original', 'page.png', 'prompt', 'gemini-3.8-flash')
+
     def test_openai_uses_original_page_once_and_rejects_partial_output(self):
         response = {'status': 'completed', 'model': 'test-model', 'output': [
             {'type': 'message', 'content': [{'type': 'output_text', 'text': TRANSCRIPT}]}]}

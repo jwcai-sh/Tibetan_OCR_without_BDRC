@@ -1775,8 +1775,18 @@ def call_model_aggregator_gemini_page(image_bytes: bytes, filename: str, prompt:
             {"type": "image_url", "image_url": {"url": image_data_url(image_bytes, filename)}},
         ]}],
     }, AGGREGATOR_API_KEY, timeout=min(GEMINI_OCR_TIMEOUT, 90))
+    upstream = raw.get("raw") or {}
+    feedback = (upstream.get("promptFeedback") or {}) if isinstance(upstream, dict) else {}
+    if feedback.get("blockReason"):
+        detail = f"blockReason={feedback['blockReason']}"
+        if feedback.get("blockReasonMessage"):
+            detail += "; " + str(feedback["blockReasonMessage"])
+        raise RuntimeError(f"Gemini 上游未返回识别文字（{redact_sensitive(detail)[:500]}）；原校对内容保留。")
     if not raw.get("ok"):
         raise RuntimeError(f"Gemini 整页复核失败：{redact_sensitive(str(raw.get('error') or '模型调用失败'))}")
+    actual_version = upstream.get("modelVersion") if isinstance(upstream, dict) else None
+    if actual_version and actual_version != model:
+        raise RuntimeError("Gemini 上游实际模型与所选模型不一致，原结果保留。")
     resolved = str(raw.get("modelRef") or raw.get("model") or "").strip()
     if resolved not in {model_ref, model}:
         raise RuntimeError("Gemini 复核响应模型与所选模型不一致，结果未采用。")
@@ -1792,24 +1802,10 @@ def call_gemini_page_review(image_bytes: bytes, filename: str, rows: list, model
     targets = normalize_center_page_rows(rows)
     prompt = center_page_prompt(targets)
     if USE_MODEL_AGGREGATOR:
-        candidates = [model]
-        if model == GEMINI_REVIEW_MODELS[0]:
-            candidates.extend(candidate for candidate in GEMINI_REVIEW_MODELS[1:] if candidate != model)
-        failures = []
-        started_at = time.monotonic()
-        for candidate in candidates:
-            if failures and time.monotonic() - started_at > 60:
-                break
-            try:
-                result = call_model_aggregator_gemini_page(image_bytes, filename, prompt, candidate)
-                response_text = str(result.get("text") or "")
-                lines = parse_center_page_response(response_text, targets)
-                return {"text": "\n".join(line["text"] for line in lines), "lines": lines,
-                        "model": result.get("model", f"gemini:{candidate}"), "provider": "gemini",
-                        "recognition_scope": "whole-page"}
-            except (RuntimeError, ValueError) as exc:
-                failures.append(f"{candidate}: {redact_sensitive(str(exc))}")
-        raise RuntimeError("Gemini 整页逐行识别未返回完整结果：" + "；".join(failures))
+        # An explicitly selected model must never silently fall back.
+        result = call_model_aggregator_gemini_page(image_bytes, filename, prompt, model)
+        response_text = str(result.get("text") or "")
+        actual_model = result.get("model", f"gemini:{model}")
     else:
         result = call_openai_compatible_images([(image_bytes, filename)], prompt, model_override=model)
         response_text = str(result.get("text") or "")

@@ -14,7 +14,7 @@ class LineReviewJobsTest(unittest.TestCase):
         self.calls = []
         self.module = SimpleNamespace(
             GEMINI_REVIEW_MODELS=['gemini-3.8-flash'],
-            parse_normalized_bbox=lambda box: {}, redact_sensitive=lambda text: text,
+            parse_normalized_bbox=lambda box: {}, normalize_center_page_rows=lambda rows: rows, redact_sensitive=lambda text: text,
         )
         self.patches = [
             patch.object(main.collaboration, 'configured', return_value=True),
@@ -79,6 +79,23 @@ class LineReviewJobsTest(unittest.TestCase):
             main.line_review_jobs['b'*32][0].result(2)
             renderer.assert_called_once_with('c'*32, 3, 260, 'png')
             self.assertEqual(self.calls[0][0], b'lossless-original-png')
+
+    def test_cloud_job_recognizes_whole_page_and_returns_lines(self):
+        rows = [{'index':0,'bbox':{'x':0,'y':0,'width':1,'height':1}}]
+        result = {'text':'བོད་','model':'gemini:gemini-3.8-flash',
+                  'lines':[{'index':0,'text':'བོད་'}], 'recognition_scope':'whole-page'}
+        import json
+        with patch.object(main, 'get_book_page_preview', return_value=SimpleNamespace(body=b'original')) as render, \
+             patch.object(main, 'call_ai_page_review', return_value=result) as recognize:
+            response = self.client.post('/api/line-review/jobs', data={
+                'job_id':'d'*32,'book_id':'c'*32,'page_num':3,'dpi':260,
+                'model':'gemini-3.8-flash','bbox':'{}','rows':json.dumps(rows)})
+            self.assertEqual(response.status_code,202)
+            main.line_review_jobs['d'*32][0].result(2)
+            recognize.assert_called_once_with('gemini',b'original','original-page.png',rows,'gemini-3.8-flash')
+            self.assertFalse(self.calls, 'Single-row recognition must not be used')
+            payload=self.client.get('/api/line-review/jobs/'+'d'*32).json()
+            self.assertEqual(payload['result'],result)
 
     def test_invalid_cloud_reference_never_calls_provider(self):
         response = self.client.post('/api/line-review/jobs', data={
