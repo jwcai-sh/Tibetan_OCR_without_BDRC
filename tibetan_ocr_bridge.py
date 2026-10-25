@@ -26,12 +26,12 @@ def call_ai_layout(image: bytes, line_count: int) -> dict[str, Any]:
 
 
 def call_ai_line_review(
-    image: bytes, filename: str, bbox: str, draft: str = "", model: str = "", region_id: str = "",
+    image: bytes, filename: str, bbox: str, draft: str = "", model: str = "", region_id: str = "", request_timeout: float | None = None,
 ) -> dict[str, Any]:
     module = load_ai_ocr_module()
     return module.call_line_review_vision(
         image, filename, module.parse_normalized_bbox(bbox), draft, model,
-        allow_page_numbers=region_id in {"left", "right"},
+        allow_page_numbers=region_id in {"left", "right"}, request_timeout=request_timeout,
     )
 
 

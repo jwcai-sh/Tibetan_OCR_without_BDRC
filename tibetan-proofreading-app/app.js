@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261025-translation-open-v10";
+const APP_BUILD_ID = "20261025-background-line-v15";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -248,6 +248,7 @@ window.addEventListener("DOMContentLoaded", () => {
   restoreWorkspaceLayout();
   configureDeploymentEndpoints();
   wireEvents();
+  initializeGeminiJobs();
   const cloudLibraryReady = initializeCloudLibrary();
   renderTranslationRoleOptions();
   renderActiveTranslationRoleMeta();
@@ -6884,7 +6885,200 @@ function loadGeminiRowModelCatalog() {
   });
 }
 
+const geminiJobStorageKey = "tibetan-gemini-background-jobs-v1";
+let geminiBackgroundJobs = [];
+let geminiJobsPolling = false;
+let geminiJobsRenderKey = "";
+
+function persistGeminiJobs() {
+  try { sessionStorage.setItem(geminiJobStorageKey, JSON.stringify(geminiBackgroundJobs)); }
+  catch { setStatus("后台任务仍在运行，但浏览器无法保存任务记录，请保持本页打开。", "warn"); }
+}
+
+function initializeGeminiJobs() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(geminiJobStorageKey) || "[]");
+    geminiBackgroundJobs = Array.isArray(saved) ? saved.filter(job => job && /^[a-f0-9]{32}$/.test(job.id)).slice(-20) : [];
+  } catch { geminiBackgroundJobs = []; }
+  for (const job of geminiBackgroundJobs) {
+    if (job.status === "preparing") { job.status = "failed"; job.error = "准备图片时页面已刷新，任务尚未提交，原结果保留。"; }
+  }
+  window.setInterval(() => { void pollGeminiJobs(); renderGeminiJobs(); }, 4000);
+  renderGeminiJobs();
+  void pollGeminiJobs();
+}
+
+function geminiJobMatchesPage(job) {
+  return job.actor === cloudLibrary.actor && job.sourceKey === state.cacheKey && job.page === state.pageNum;
+}
+
+function geminiJobRowSnapshot(result, index) {
+  const compare = getOcrSourceCompare(result);
+  return JSON.stringify({line: compare?.llm?.lines[index], errors: (compare?.sharedErrors || []).filter(mark => mark.blockIndex === index)});
+}
+
+function geminiJobCanApply(job) {
+  return geminiJobMatchesPage(job) && geminiJobRowSnapshot(state.ocrResults.get(state.pageNum), job.index) === job.baseline;
+}
+
+function renderGeminiJobs() {
+  const panel = document.getElementById("geminiBackgroundJobs");
+  if (!panel) return;
+  const jobs = geminiBackgroundJobs.filter(job => job.actor === cloudLibrary.actor && job.sourceKey === state.cacheKey);
+  const renderKey = JSON.stringify(jobs.map(job => [job.id, job.status, job.error, job.result, geminiJobMatchesPage(job), geminiJobCanApply(job)]));
+  if (renderKey === geminiJobsRenderKey) return;
+  geminiJobsRenderKey = renderKey;
+  panel.replaceChildren();
+  panel.hidden = jobs.length === 0;
+  for (const job of jobs) {
+    const row = document.createElement("div");
+    row.style.cssText = "padding:10px 16px;border-bottom:1px solid #dce5df";
+    const label = document.createElement("div");
+    const names = {preparing:"准备原页图片", submitting:"正在提交", uncertain:"正在确认提交状态", queued:"后台排队中，可继续校对", running:"后台识别中，可继续校对", completed:"识别完成，等待你应用", failed:"识别未完成", applied:"已应用到 Gemini 候选"};
+    label.textContent = `第 ${job.page} 页第 ${job.index + 1} 行 · ${job.model} · ${names[job.status] || job.status}`;
+    row.append(label);
+    if (job.error) {
+      const note = document.createElement("div"); note.textContent = job.error; row.append(note);
+    }
+    if (job.status === "completed") {
+      const text = document.createElement("textarea");
+      text.readOnly = true; text.value = job.result.text;
+      text.setAttribute("aria-label", `第 ${job.page} 页第 ${job.index + 1} 行后台识别候选`);
+      text.style.cssText = "display:block;width:100%;min-height:70px;font-size:20px;margin:8px 0";
+      row.append(text);
+      const apply = document.createElement("button");
+      apply.type = "button"; apply.className = "ghost-button compact";
+      apply.disabled = !geminiJobCanApply(job);
+      apply.textContent = !geminiJobMatchesPage(job) ? `返回第 ${job.page} 页后应用` : !geminiJobCanApply(job) ? "该行已修改，请复制候选手动核对" : "应用到 Gemini 候选（保留已采用校对文本）";
+      apply.onclick = () => { void applyGeminiJob(job); };
+      row.append(apply);
+    }
+    if (["failed", "applied", "completed"].includes(job.status)) {
+      const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "ghost-button compact";
+      dismiss.textContent = job.status === "completed" ? "保留现有结果，关闭此候选" : "关闭提示";
+      dismiss.onclick = () => { geminiBackgroundJobs = geminiBackgroundJobs.filter(item => item !== job); persistGeminiJobs(); renderGeminiJobs(); };
+      row.append(dismiss);
+    }
+    panel.append(row);
+  }
+}
+
+async function pollGeminiJobs() {
+  if (geminiJobsPolling || !cloudLibrary.actor) return;
+  geminiJobsPolling = true;
+  try {
+    for (const job of geminiBackgroundJobs) {
+      if (job.actor !== cloudLibrary.actor || !["queued", "running", "uncertain", "submitting"].includes(job.status)) continue;
+      try {
+        const response = await fetch(`${job.endpoint}/jobs/${job.id}`, {signal: AbortSignal.timeout(15000)});
+        const payload = await parseOcrResponse(response);
+        if (response.status === 401 || response.status === 403) continue;
+        // A lost POST response may precede the server accepting the upload.
+        if (response.status === 404 && Date.now() - job.created < 120000) continue;
+        if (response.status === 404 || response.status === 410) {
+          job.status = "failed"; job.error = payload.error || "任务不存在或已过期，原校对内容保留";
+        } else if (!response.ok) {
+          job.error = "任务状态暂时查询失败，将继续查询；不会重复提交识别。";
+        } else {
+          job.error = "";
+          if (payload.status === "completed") {
+            job.status = "failed"; // Invalid model/text must become terminal, never silently applied.
+            const text = normalizeOcrTextSpacing(validateIndependentReviewText(payload.result?.text || ""));
+            if (String(payload.result?.model || "").split(":").pop() !== job.model) throw new Error("返回模型与所选模型不一致，原结果保留。");
+            job.result = {text, model: payload.result.model}; job.status = "completed";
+          } else if (payload.status === "failed") {
+            job.status = "failed"; job.error = payload.error || "后台识别失败，原结果保留";
+          } else if (["queued", "running"].includes(payload.status)) job.status = payload.status;
+        }
+      } catch (error) {
+        job.error = `查询中断：${error.message || error}；原结果保留。`;
+      }
+      persistGeminiJobs(); renderGeminiJobs();
+    }
+  } finally { geminiJobsPolling = false; }
+}
+
+async function applyGeminiJob(job) {
+  if (!geminiJobCanApply(job)) { renderGeminiJobs(); return; }
+  const result = state.ocrResults.get(job.page);
+  const compare = getOcrSourceCompare(result);
+  const previous = compare.llm.lines[job.index];
+  compare.llm.lines[job.index] = {
+    ...previous, text: job.result.text, model: job.result.model, provider: "gemini",
+    error: false, missing: false, diagnostic: false, recognitionError: "",
+    manualBaselineText: undefined, manuallyEdited: false, manualErrorChars: 0, manualEditRanges: [],
+  };
+  compare.sharedErrors = normalizeSharedErrorMarks((compare.sharedErrors || []).map(mark =>
+    mark.blockIndex === job.index ? {...mark, llmRanges: []} : mark
+  ).filter(mark => mark.bdrcRanges?.length || mark.llmRanges?.length));
+  compare.llm.text = joinActiveOcrLines(compare.llm.lines);
+  compare.llm.returnedLineCount = countNonEmptyOcrLines(compare.llm.lines);
+  result.compare = compare; result.updatedAt = new Date().toISOString();
+  pendingGeminiRowModels.delete(JSON.stringify([job.sourceKey, job.page, job.index]));
+  job.status = "applied"; persistGeminiJobs(); renderGeminiJobs();
+  updateOcrPanelForPage();
+  try {
+    const saved = saveCachedResults({immediateRemote:true});
+    if (saved === false) throw new Error("本地保存失败，请保留当前页面");
+    await saved;
+  } catch (error) {
+    job.error = `候选已应用，保存未确认：${error.message || error}。请保留当前页面并重试云端同步。`;
+    persistGeminiJobs(); renderGeminiJobs();
+  }
+}
+
 async function reRecognizeGeminiRow(index, select, sourceLine, aiLine) {
+  const endpoint = getAiVisionLineReviewEndpoint();
+  // Keep the existing local service protocol; cloud deployments use jobs.
+  if (new URL(endpoint, location.href).pathname !== "/api/line-review") {
+    return reRecognizeGeminiRowLegacy(index, select, sourceLine, aiLine);
+  }
+  if (pageReviewPending || state.isOcrBusy || state.batchOcr?.running) return;
+  const result = state.ocrResults.get(state.pageNum);
+  const compare = getOcrSourceCompare(result);
+  const source = getSourceLineForRow(sourceLine, compare?.llm?.lines[index] || aiLine);
+  const bbox = normalizeBbox(source?.bbox);
+  if (!bbox || source?.estimated) { setStatus("该行缺少准确原文位置，原结果保留。", "warn"); return; }
+  if (geminiBackgroundJobs.some(job => geminiJobMatchesPage(job) && job.index === index && !["failed", "applied"].includes(job.status))) {
+    setStatus("该行已有后台任务，请查看后台识别列表，避免重复调用。", "warn"); return;
+  }
+  if (geminiBackgroundJobs.length >= 20) { setStatus("请先关闭已完成或失败的后台任务提示。", "warn"); return; }
+  const job = {
+    id: crypto.randomUUID().replaceAll("-", ""), actor: cloudLibrary.actor, endpoint,
+    sourceKey: state.cacheKey, page: state.pageNum, index, model: select.value,
+    baseline: geminiJobRowSnapshot(result, index), created: Date.now(), status:"preparing",
+  };
+  geminiBackgroundJobs.push(job); persistGeminiJobs(); renderGeminiJobs();
+  // Lock only while capturing the current original, not while the model runs.
+  pageReviewPending = true; setBusy(true);
+  let blob;
+  try {
+    blob = await getCurrentPageImageBlob();
+    if (!geminiJobMatchesPage(job)) throw new Error("页面已切换，请重新提交");
+  } catch (error) {
+    job.status = "failed"; job.error = String(error.message || error);
+    persistGeminiJobs(); renderGeminiJobs(); return;
+  } finally { pageReviewPending = false; setBusy(false); }
+  job.status = "submitting"; persistGeminiJobs(); renderGeminiJobs();
+  const form = new FormData();
+  form.append("file", blob, "original-page.png"); form.append("bbox", JSON.stringify(bbox));
+  form.append("job_id", job.id); form.append("model", job.model);
+  form.append("ocr_text", compare?.llm?.lines[index]?.text || "");
+  form.append("region_id", source?.regionId || "center");
+  try {
+    const response = await fetch(`${endpoint}/jobs`, {method:"POST", body:form, signal:AbortSignal.timeout(75000)});
+    const payload = await parseOcrResponse(response);
+    if (!response.ok) {
+      if (response.status >= 500) throw new Error(payload.error || `HTTP ${response.status}`);
+      job.status = "failed"; job.error = payload.error || `HTTP ${response.status}`;
+    } else if (["submitting", "uncertain"].includes(job.status)) { job.status = "queued"; job.error = ""; }
+  } catch {
+    job.status = "uncertain"; job.error = "提交响应中断，正在按任务编号确认；不会自动重复识别。";
+  }
+  persistGeminiJobs(); renderGeminiJobs(); void pollGeminiJobs();
+}
+
+async function reRecognizeGeminiRowLegacy(index, select, sourceLine, aiLine) {
   if (pageReviewPending || state.isOcrBusy || state.batchOcr?.running) return;
   const pageNum = state.pageNum;
   const sourceKey = state.cacheKey;

@@ -689,6 +689,74 @@ async def ai_line_review(
         raise HTTPException(502, detail[:1500]) from exc
 
 
+# Jobs retain only the result after execution; submitted original image bytes are
+# passed unchanged to the model bridge. No proofreading state is written here.
+line_review_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="line-review")
+line_review_jobs: dict[str, tuple[Future, str, float]] = {}
+line_review_jobs_lock = threading.Lock()
+LINE_REVIEW_JOB_TTL = 3600
+
+
+@app.post("/api/line-review/jobs")
+async def submit_line_review_job(
+    request: Request, file: UploadFile = File(...), bbox: str = Form(...),
+    job_id: str = Form(...), ocr_text: str = Form(""), model: str = Form(""),
+    region_id: str = Form(""),
+) -> Response:
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        raise HTTPException(400, "任务编号无效")
+    actor = getattr(request.state, "collaborator", "")
+    image = await file.read(MAX_UPLOAD_BYTES + 1)
+    if not image or len(image) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "原页图片为空或超过上传限制")
+    # Validate before queuing a potentially billable request.
+    module = load_ai_ocr_module()
+    try:
+        module.parse_normalized_bbox(bbox)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(400, "原文坐标无效") from exc
+    if model.removeprefix("gemini:") not in module.GEMINI_REVIEW_MODELS:
+        raise HTTPException(400, "所选 Gemini 模型不在允许列表中")
+    now = time.monotonic()
+    with line_review_jobs_lock:
+        for key, (future, _, created) in list(line_review_jobs.items()):
+            if future.done() and now - created > LINE_REVIEW_JOB_TTL:
+                del line_review_jobs[key]
+        existing = line_review_jobs.get(job_id)
+        if existing and existing[1] != actor:
+            raise HTTPException(404, "任务不存在")
+        if not existing:
+            if sum(not job[0].done() for job in line_review_jobs.values()) >= 4:
+                raise HTTPException(429, "后台识别任务较多，请稍后提交")
+            if len(line_review_jobs) >= 100:
+                raise HTTPException(429, "后台任务记录已满，请稍后提交")
+            future = line_review_executor.submit(
+                call_ai_line_review, image, file.filename or "page.png", bbox,
+                ocr_text, model, region_id, 180.0,
+            )
+            line_review_jobs[job_id] = (future, actor, now)
+    return JSONResponse({"status": "queued", "job_id": job_id}, status_code=202)
+
+
+@app.get("/api/line-review/jobs/{job_id}")
+def get_line_review_job(request: Request, job_id: str) -> dict[str, Any]:
+    with line_review_jobs_lock:
+        job = line_review_jobs.get(job_id)
+    if job is None or job[1] != getattr(request.state, "collaborator", ""):
+        raise HTTPException(404, "任务不存在，服务器可能已重启；原校对内容保留")
+    future, _, created = job
+    if time.monotonic() - created > LINE_REVIEW_JOB_TTL:
+        raise HTTPException(410, "任务已过期，原校对内容保留")
+    if not future.done():
+        return {"status": "running" if future.running() else "queued"}
+    try:
+        result = future.result()
+        return {"status": "completed", "result": {"text": result.get("text", ""), "model": result.get("model", "")}}
+    except Exception as exc:
+        detail = load_ai_ocr_module().redact_sensitive(str(exc))
+        return {"status": "failed", "error": detail[:500] or "后台识别失败，原校对内容保留"}
+
+
 @app.get("/api/review-models")
 def review_models() -> dict[str, Any]:
     return call_ai_review_models()
