@@ -4217,7 +4217,18 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
   const before = JSON.stringify(original);
   const previous = getOcrSourceCompare(original);
   let baseLines = previous?.bdrc?.lines?.length ? getEffectiveOcrSideLines(previous.bdrc) : [];
-  let rows = baseLines.length ? collectCenterPageReviewRows(original) : null;
+  // Earlier whole-page OCR blocks and later Qwen physical rows can occupy
+  // different indexes. Use the reviewed physical boxes when all are present.
+  const physicalRows = (previous?.qwenReviews || [])
+    .filter((line) => Number.isInteger(line?.index) && line.index >= 0
+      && String(line?.text || "").trim() && normalizeBbox(line?.bbox))
+    .map((line) => ({index: line.index, bbox: normalizeBbox(line.bbox), region_id: "center"}));
+  const uniquePhysicalRows = new Map(physicalRows.map((row) => [row.index, row]));
+  const usePhysicalRows = uniquePhysicalRows.size >= 2
+    && uniquePhysicalRows.size === physicalRows.length
+    && uniquePhysicalRows.size >= (original?.lines?.length || 0);
+  let rows = usePhysicalRows ? [...uniquePhysicalRows.values()] :
+    (baseLines.length ? collectCenterPageReviewRows(original) : null);
   if (!rows?.length) {
     setStatus("正在定位中间栏文字行…", "warn");
     const layout = await callOcrEndpoint(endpoint.replace(/\/ocr\/?$/, "/line-layout"), blob);
@@ -4240,10 +4251,21 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
   const byIndex = new Map(reviewed.map(line => [line.index, line]));
   if (original) {
     const compare = getOcrSourceCompare(original) || makeEmptyOcrCompare(original);
-    compare.llm.lines = baseLines.map((line, index) => {
+    const oldLines = compare.llm.lines || [];
+    const rowCount = Math.max(baseLines.length, oldLines.length, ...rows.map(row => row.index + 1));
+    compare.llm.lines = Array.from({length: rowCount}, (_, index) => {
+      const line = baseLines[index] || oldLines[index] || {index, text: ""};
+      const oldLine = oldLines[index];
       const candidate = byIndex.get(index);
-      if (!candidate) return compare.llm.lines[index] || {...line, text: "", missing: true};
-      return {...line, ...candidate, missing: false, error: false, diagnostic: false};
+      if (oldLine?.manuallyEdited || oldLine?.manualEditRanges?.length || oldLine?.manualErrorChars) {
+        return oldLine;
+      }
+      if (candidate) return {...line, ...candidate, deleted: false,
+        missing: false, error: false, diagnostic: false};
+      if (!usePhysicalRows) return oldLine || {...line, text: "", missing: true};
+      const oldText = String(oldLine?.text || "").trim();
+      const duplicate = !oldText || reviewed.some((item) => reviewLineSimilarity(oldText, item.text) >= 0.45);
+      return duplicate ? {...line, ...oldLine, deleted: true} : (oldLine || {...line, text: "", missing: true});
     });
     compare.llm.text = joinActiveOcrLines(compare.llm.lines);
     compare.llm.model = payload.model;
@@ -4261,7 +4283,15 @@ async function runTraditionalGeminiLines(endpoint, blob, selectedModel = "") {
       compare: normalizeOcrCompare({bdrc: {label:"BDRC", text:"", lines:[]},
         llm: {label:"Gemini", text, lines, model:payload.model, provider:"gemini"}})});
   }
-  await saveCachedResults({immediateRemote: true});
+  const saved = saveCachedResults({immediateRemote: true});
+  if (saved === false) throw new Error("本地保存失败，识别结果未能保存。");
+  if (isCloudDeployment() && state.remoteBookId && !saved) {
+    throw new Error("本地已保存，但云端校对状态尚未就绪，请重试云端校对状态。");
+  }
+  await saved;
+  if (isCloudDeployment() && state.remoteBookId && !state.remoteRestoreComplete) {
+    throw new Error("本地已保存，但云端同步失败；请重试云端校对状态。");
+  }
   if (state.pageNum === pageNum) updateOcrPanelForPage();
   updateSummary();
   setStatus(`第 ${pageNum} 页 Gemini 整页识别已保存（中间栏 ${reviewed.length} 行）。`, "ok");
