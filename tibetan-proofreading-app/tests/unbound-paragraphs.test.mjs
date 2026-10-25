@@ -13,3 +13,15 @@ assert.deepEqual(get({text:'a\nb',lines:[{text:'different'}]}),[]);
 assert.deepEqual(get({text:'a\nb',lines:[{text:'a',deleted:true}]}),[]);
 assert.deepEqual(get({text:'a\nb',lines:[{text:'a'},{text:'b'}]}),[]);
 console.log('Unbound saved paragraphs: passed (read-only, exact prefix, no deleted-row resurrection)');
+
+const dedup=source.slice(source.indexOf('function mergeDuplicateSourcePreviews('),source.indexOf('function createSourceBlockPreviewCanvas('));
+vm.runInContext(dedup,context);
+const cards=[];
+const previews=[0,1,2,3].map(index=>{
+ const card={hidden:false,classList:{remove(name){if(name==='is-duplicate-source')card.hidden=false;},toggle(){card.hidden=true;}}}; cards.push(card);
+ const note={}; const strip={style:{}};
+ return {dataset:{physicalRowKey:'same-position',blockIndex:String(index),previewHeight:'100px'},style:{},querySelector(selector){return selector==='[data-crop-strip]'?strip:note;},closest(){return card;}};
+});
+context.mergeDuplicateSourcePreviews({querySelectorAll:()=>previews});
+assert.ok(cards.every(card=>!card.hidden),'Overlapping crop positions must not hide any OCR editor');
+console.log('Duplicate source positions preserve all proofreading cards');

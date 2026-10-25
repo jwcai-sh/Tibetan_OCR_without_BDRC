@@ -2193,9 +2193,7 @@ body.is-resizing-panes * {
   opacity: 1 !important;
 }
 
-.workspace.proofread-merged-view .proofread-block-card.is-duplicate-source {
-  display: none !important;
-}
+/* Overlapping source coordinates must never hide editable OCR results. */
 
 .proofread-result-editor {
   cursor: text;

@@ -7980,7 +7980,7 @@ async function getCachedLineCrop(sourceLine, index, metadata, context, blob = nu
 // changes the archived image that a model actually received.
 async function getSourceLinePreviewCrop(sourceLine, index, context) {
   const key = JSON.stringify([context.cacheKey, context.pageNum, index, context.dpi,
-    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v4"]);
+    context.profile, context.endpoint, normalizeBbox(sourceLine.bbox), "source-preview-v5"]);
   let cached = null;
   try { cached = await accessLineCropCache(key); } catch { /* Render without a persistent cache. */ }
   if (cached?.payload?.review_image?.crop_version === 26 && cached.payload.images?.length) return cached;
@@ -8001,10 +8001,13 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
     data.append("preview_format", "jpeg");
     const profileId = typeof context.profile === "string" ? context.profile : context.profile?.id;
     if (profileId === "traditional" && !["left", "right", "左侧", "右侧"].includes(sourceLine.regionId || sourceLine.regionLabel)) {
-      const rowIndex = Number.isInteger(sourceLine.sourceRowIndex) ? sourceLine.sourceRowIndex
-        : Number.isInteger(sourceLine.regionLineIndex) ? sourceLine.regionLineIndex : index;
-      data.append("physical_row_index", String(rowIndex));
       const compare = getOcrSourceCompare(state.ocrResults.get(context.pageNum));
+      // Legacy normalization supplied regionLineIndex=0 to every row. Count
+      // preceding center blocks instead of treating that default as a binding.
+      const preceding = (compare?.llm?.lines || []).slice(0, index);
+      const rowIndex = Number.isInteger(sourceLine.sourceRowIndex) ? sourceLine.sourceRowIndex
+        : preceding.length === index ? preceding.filter(line => !["left", "right", "左侧", "右侧"].includes(line.regionId || line.regionLabel)).length : index;
+      data.append("physical_row_index", String(rowIndex));
       const sourceLineCount = compare?.llm?.lines?.length || compare?.bdrc?.lines?.length || 0;
       if (sourceLineCount > 0) data.append("physical_row_count", String(sourceLineCount));
     }
@@ -8221,11 +8224,11 @@ function mergeDuplicateSourcePreviews(root) {
     }
     note.hidden = !owner;
     if (owner) {
-      note.textContent = `与第 ${Number(owner.dataset.blockIndex) + 1} 行对应同一原文行；识别结果已在第 ${Number(owner.dataset.blockIndex) + 1} 行显示。`;
+      note.textContent = `与第 ${Number(owner.dataset.blockIndex) + 1} 行对应同一原文行；定位可能重叠，请核对；本行识别文字仍单独保留。`;
     } else {
       owners.set(preview.dataset.physicalRowKey, preview);
     }
-    preview.closest(".proofread-block-card")?.classList.toggle("is-duplicate-source", Boolean(owner));
+    preview.closest(".proofread-block-card")?.classList.remove("is-duplicate-source");
     if (strip) strip.style.display = owner ? "none" : "flex";
     preview.style.minHeight = owner ? "0" : preview.dataset.previewHeight;
   }
