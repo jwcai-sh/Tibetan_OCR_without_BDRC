@@ -170,6 +170,7 @@ const state = {
   pdfDoc: null,
   remoteServerPdf: false,
   remoteFirstPageDeadline: 0,
+  remotePreviewError: "",
   remoteRestoreComplete: false,
   pdfUrl: "",
   pdfFile: null,
@@ -1398,7 +1399,14 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       catch (error) { console.warn("Could not preserve pre-restore local cache", error); }
     }
     restoreCachedResults(restoredCache);
-    await renderCurrentPage();
+    if (state.remoteServerPdf) {
+      // The preview runs independently. New collaborators have no cached text
+      // to display while it is pending, so restore the cloud panels now.
+      updateOcrPanelForPage();
+      updateTranslationPanelForPage();
+    } else {
+      await renderCurrentPage();
+    }
     state.remotePageRevisions = remoteState.page_revisions || {};
     state.remotePageSnapshots = makeRemotePageSnapshots({
       ocrResults: serializeResultMap(state.ocrResults),
@@ -1418,12 +1426,14 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     }
     if (els.sourceRetryButton) {
-      els.sourceRetryButton.hidden = true;
+      els.sourceRetryButton.hidden = !state.remotePreviewError;
       els.sourceRetryButton.textContent = "重试加载当前页";
     }
     setCollaborationFeedback("");
     if (els.collabRetrySync) els.collabRetrySync.hidden = true;
-    if (pendingPages.length && !remoteState.collaboration_degraded) {
+    if (state.remotePreviewError) {
+      setStatus(`云端校对内容已恢复；原文预览加载失败：${state.remotePreviewError}。请重试加载当前页。`, "warn");
+    } else if (pendingPages.length && !remoteState.collaboration_degraded) {
       setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
     } else {
       setStatus(remoteState.collaboration_degraded
@@ -1547,6 +1557,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
 
 async function loadRemotePdfWithServerPages(bookId, requestId) {
   state.remoteServerPdf = true;
+  state.remotePreviewError = "";
   state.remoteFirstPageDeadline = Date.now() + 120000;
   state.sourceType = "pdf";
   const response = await fetchWithCloudTimeout(
@@ -1563,15 +1574,18 @@ async function loadRemotePdfWithServerPages(bookId, requestId) {
   restoreCachedResults();
   refreshControls();
   setStatus(`已读取 ${state.pageCount} 页，正在生成首页原文…`, "warn");
-  await renderCurrentPage();
-  if (requestId !== state.documentRequestId) return false;
-  state.remoteFirstPageDeadline = 0;
-  scheduleIdleWork(() => {
-    if (requestId === state.documentRequestId) {
-      void primeCurrentPageDirectText();
-      buildPdfThumbnails();
-    }
-  });
+  // Do not gate cloud-state restoration on downloading/decoding the preview.
+  // renderCurrentPage owns the visible error and retry control.
+  void renderCurrentPage().then(() => {
+    if (requestId !== state.documentRequestId) return;
+    state.remoteFirstPageDeadline = 0;
+    scheduleIdleWork(() => {
+      if (requestId === state.documentRequestId) {
+        void primeCurrentPageDirectText();
+        buildPdfThumbnails();
+      }
+    });
+  }).catch((error) => console.warn("First page preview unavailable", error));
   return true;
 }
 
@@ -3103,6 +3117,7 @@ function resetDocumentState() {
   state.pdfDoc = null;
   state.remoteServerPdf = false;
   state.remoteFirstPageDeadline = 0;
+  state.remotePreviewError = "";
   state.remoteRestoreComplete = false;
   if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
   state.pdfUrl = "";
@@ -4048,6 +4063,7 @@ async function renderCurrentPage() {
   } catch (error) {
     if (token !== state.renderToken) return;
     if (state.remoteServerPdf) {
+      state.remotePreviewError = error.name === "AbortError" ? "请求超时" : String(error.message || error);
       els.pdfCanvas.style.display = "none";
       els.imagePage.style.display = "none";
       els.emptyState.style.display = "grid";
@@ -4092,10 +4108,11 @@ async function renderCurrentPdfPageWithLocalService(token) {
     els.imagePage.onerror = null;
     els.imagePage.src = state.pdfPageRenderUrl;
     if (typeof els.imagePage.decode === "function") {
-      await els.imagePage.decode().catch(() => {});
+      await decodeSourcePreview(els.imagePage);
       if (token !== state.renderToken) return true;
     }
     els.imagePage.style.display = "block";
+    state.remotePreviewError = "";
     els.pdfCanvas.style.display = "none";
     els.emptyState.style.display = "none";
     if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
@@ -4105,6 +4122,20 @@ async function renderCurrentPdfPageWithLocalService(token) {
     console.warn("Local Poppler PDF render unavailable, falling back to PDF.js", error);
     if (state.remoteServerPdf) throw error;
     return false;
+  }
+}
+
+async function decodeSourcePreview(image, timeoutMs = 15000) {
+  let timer;
+  try {
+    await Promise.race([
+      image.decode(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(() => reject(new Error("图片解码超时，请重试加载当前页")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
