@@ -273,8 +273,11 @@ window.addEventListener("DOMContentLoaded", () => {
   if (window.lucide) {
     window.lucide.createIcons();
   }
-  window.__tibetanWorkbenchBootReady = true;
-  if (els.collaborationRetryButton) els.collaborationRetryButton.onclick = null;
+  if (!window.__tibetanWorkbenchBootAssetFailed) {
+    window.__tibetanWorkbenchBootReady = true;
+    window.__tibetanWorkbenchBootSuccess?.();
+    if (els.collaborationRetryButton) els.collaborationRetryButton.onclick = null;
+  }
 });
 
 function cacheElements() {
