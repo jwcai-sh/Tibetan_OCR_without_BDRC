@@ -169,6 +169,7 @@ let lastProofreadSelectionPoint = null;
 const state = {
   pdfDoc: null,
   remoteServerPdf: false,
+  remotePreviewPending: false,
   remoteFirstPageDeadline: 0,
   remotePreviewError: "",
   remoteRestoreComplete: false,
@@ -1767,8 +1768,9 @@ async function initializeCloudLibrary() {
   if (retryAfterFailedBoot) void restoreRouteFromLocation();
 }
 
-async function fetchWithCloudTimeout(url, options = {}, timeoutMs = 120000, maxAttempts = 1) {
-  const retryable = String(options.method || "GET").toUpperCase() === "GET";
+async function fetchWithCloudTimeout(url, options = {}, timeoutMs = 120000, maxAttempts = 1, retryReadOnlyPost = false) {
+  const method = String(options.method || "GET").toUpperCase();
+  const retryable = method === "GET" || (method === "POST" && retryReadOnlyPost);
   for (let attempt = 0; attempt < Math.max(1, maxAttempts); attempt += 1) {
     const controller = new AbortController();
     let timer;
@@ -3213,6 +3215,7 @@ function resetDocumentState() {
 
   state.pdfDoc = null;
   state.remoteServerPdf = false;
+  state.remotePreviewPending = false;
   state.remoteFirstPageDeadline = 0;
   state.remotePreviewError = "";
   state.remoteRestoreComplete = false;
@@ -4114,6 +4117,7 @@ async function renderCurrentPage() {
   }
 
   const token = ++state.renderToken;
+  if (state.remoteServerPdf) state.remotePreviewPending = true;
   try {
     if (state.remoteServerPdf || (isCloudDeployment() && state.remoteBookId && window.matchMedia("(max-width: 760px)").matches)) {
       if (await renderCurrentPdfPageWithLocalService(token)) {
@@ -4182,6 +4186,11 @@ async function renderCurrentPage() {
     updateTranslationPanelForPage();
     updateThumbnailState();
     deferCurrentPageSourceHydration(state.pageNum, token);
+  } finally {
+    if (token === state.renderToken && state.remoteServerPdf) {
+      state.remotePreviewPending = false;
+      drainLinePreviewQueue();
+    }
   }
 }
 
@@ -8161,6 +8170,7 @@ function queueLinePreview(task) {
 }
 
 function drainLinePreviewQueue() {
+  if (state.remotePreviewPending) return;
   while (activeLinePreviews < 2 && linePreviewQueue.length) {
     const next = linePreviewQueue.shift();
     activeLinePreviews += 1;
@@ -8282,7 +8292,7 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
       if (sourceLineCount > 0) data.append("physical_row_count", String(sourceLineCount));
     }
     const endpoint = context.endpoint.replace(/line-review$/, "line-preview");
-    let response = await fetch(endpoint, { method: "POST", body: data });
+    let response = await fetchWithCloudTimeout(endpoint, { method: "POST", body: data }, 90000, 2, true);
     let payload = await response.json();
     let approximateRowMatch = false;
     let approximateAttempt = false;
@@ -8292,7 +8302,7 @@ async function getSourceLinePreviewCrop(sourceLine, index, context) {
       data.delete("physical_row_index");
       data.delete("physical_row_count");
       approximateAttempt = true;
-      response = await fetch(endpoint, { method: "POST", body: data });
+      response = await fetchWithCloudTimeout(endpoint, { method: "POST", body: data }, 90000, 2, true);
       payload = await response.json();
       approximateRowMatch = response.ok && Number.isInteger(payload.review_image?.source_bbox?.physical_row_index);
       if (response.ok && !approximateRowMatch) throw new Error("原文物理行数与识别 block 数不一致，且无法按坐标定位物理行");

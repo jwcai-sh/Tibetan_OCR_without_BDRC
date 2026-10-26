@@ -5,6 +5,24 @@ from fastapi.testclient import TestClient
 from zeabur_app import main
 
 class PreviewReferenceTests(unittest.TestCase):
+    def test_page_preview_reused_for_multiple_line_crops(self):
+        import fitz
+
+        document = fitz.open()
+        document.new_page(width=200, height=100)
+        pdf_bytes = document.tobytes()
+        document.close()
+        main._cached_pdf_page_preview.cache_clear()
+        metadata = {'source_key': 'test.pdf', 'name': 'test.pdf', 'size': len(pdf_bytes)}
+        with patch.object(main, 'read_json', return_value=metadata), patch.object(main, 'cached_pdf_source', return_value=pdf_bytes) as source:
+            first = main.get_book_page_preview('a' * 32, 1, 260, 'jpeg')
+            second = main.get_book_page_preview('a' * 32, 1, 260, 'jpeg')
+        self.assertEqual(first.body, second.body)
+        self.assertTrue(first.body.startswith(b'\xff\xd8'))
+        self.assertEqual(source.call_count, 1)
+        self.assertEqual(main._cached_pdf_page_preview.cache_info().hits, 1)
+        main._cached_pdf_page_preview.cache_clear()
+
     def test_cloud_reference_no_upload_and_no_state_write(self):
         with patch.object(main.collaboration, 'configured', return_value=True), patch.object(main.collaboration, 'current_actor', return_value='alice'), patch.object(main,'get_book_page_preview',return_value=SimpleNamespace(body=b'page-jpeg')) as render, patch.object(main,'call_ai_line_preview',return_value={'images':['preview']}) as crop:
             response=TestClient(main.app).post('/api/line-preview',data={'book_id':'a'*32,'page_num':4,'dpi':260,'bbox':'{}'})

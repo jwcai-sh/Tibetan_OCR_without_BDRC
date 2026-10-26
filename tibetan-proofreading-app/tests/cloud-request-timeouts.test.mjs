@@ -31,6 +31,16 @@ test("cloud writes are never replayed after an uncertain response", async () => 
   assert.equal(client.calls(), 1);
 });
 
+test("read-only line previews retry only when explicitly enabled", async () => {
+  const client = makeRequest([{ status: 503, body: { cancel: async () => {} } }, { status: 200 }]);
+  const response = await client.request("/api/line-preview", { method: "POST" }, 100, 2, true);
+  assert.equal(response.status, 200);
+  assert.equal(client.calls(), 2);
+  const ordinaryPost = makeRequest([{ status: 503 }, { status: 200 }]);
+  assert.equal((await ordinaryPost.request("/api/save", { method: "POST" }, 100, 2)).status, 503);
+  assert.equal(ordinaryPost.calls(), 1);
+});
+
 test("a stalled read ends and retries even if fetch ignores abort", async () => {
   const fetch = () => new Promise(() => {});
   const request = new Function("fetch", "window", "AbortController", `${source}\nreturn fetchWithCloudTimeout;`)(

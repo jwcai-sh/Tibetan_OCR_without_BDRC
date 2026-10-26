@@ -107,6 +107,29 @@ def cached_pdf_source(source_key: str, source_size: int) -> bytes:
     return content
 
 
+_pdf_page_render_lock = threading.Lock()
+
+
+@lru_cache(maxsize=8)
+def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str) -> bytes:
+    import fitz
+
+    with fitz.open(stream=cached_pdf_source(source_key, source_size), filetype="pdf") as document:
+        if page_num > document.page_count:
+            raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
+        page = document.load_page(page_num - 1)
+        bounded_dpi = min(dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
+        pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
+        return pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
+
+
+def cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str) -> bytes:
+    # A new collaborator requests several crops from the same page at once.
+    # Coalesce those full-page renders and bound concurrent PDF work per worker.
+    with _pdf_page_render_lock:
+        return _cached_pdf_page_preview(source_key, source_size, page_num, dpi, preview_format)
+
+
 def require_library_access(authorization: str) -> None:
     if not LIBRARY_PASSWORD:
         raise HTTPException(503, "云端文档目录尚未设置访问口令")
@@ -501,15 +524,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: s
     safe_dpi = min(360, max(72, dpi))
     preview_format = "jpeg" if format.lower() in ("jpeg", "jpg") else "png"
     try:
-        import fitz
-
-        with fitz.open(stream=cached_pdf_source(source_key, int(metadata.get("size") or 0)), filetype="pdf") as document:
-            if page_num > document.page_count:
-                raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
-            page = document.load_page(page_num - 1)
-            bounded_dpi = min(safe_dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
-            pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
-            image_bytes = pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
+        image_bytes = cached_pdf_page_preview(source_key, int(metadata.get("size") or 0), page_num, safe_dpi, preview_format)
     except HTTPException:
         raise
     except oss2.exceptions.NoSuchKey as exc:
