@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
 function setup() {
-  const c = vm.createContext({ console, setTimeout, clearTimeout,
+  const c = vm.createContext({ console, setTimeout, clearTimeout, AbortController,
     document: { querySelector: () => null },
     window: { addEventListener() {}, setTimeout, clearTimeout, location: { origin: 'https://example.test' } },
   });
@@ -39,4 +39,18 @@ test('broken images report failure instead of being treated as loaded', async ()
   const c = setup();
   c.testImage = { decode: async () => { throw new Error('invalid image'); } };
   await assert.rejects(vm.runInContext('decodeSourcePreview(testImage, 50)', c), /invalid image/);
+});
+
+test('a cloud response with saved OCR cannot be reported as restored when hydration failed', () => {
+  const c = setup();
+  c.cloud = {ocrResults:{1:{text:'saved'}},translationResults:{}};
+  assert.throws(() => vm.runInContext('requireRestoredCloudResults(cloud, false)', c), /校对内容恢复失败/);
+});
+
+test('a stalled cloud state request ends with a timeout even if fetch ignores abort', async () => {
+  const c = setup();
+  c.fetch = () => new Promise(() => {});
+  const started = Date.now();
+  await assert.rejects(vm.runInContext("fetchCloudBookState('/api/books/book/state', {}, 5)", c), /校对状态请求超时/);
+  assert.ok(Date.now() - started < 1000);
 });

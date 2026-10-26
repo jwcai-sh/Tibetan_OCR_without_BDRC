@@ -172,6 +172,7 @@ const state = {
   remoteFirstPageDeadline: 0,
   remotePreviewError: "",
   remoteRestoreComplete: false,
+  remoteStateLoadError: "",
   pdfUrl: "",
   pdfFile: null,
   pdfPageRenderUrl: "",
@@ -299,7 +300,7 @@ function cacheElements() {
     "cloudLibraryPassword",
     "collaboratorName",
     "collaborationLoginBar", "collaborationActorLabel", "collabHeaderName", "collabHeaderPassword", "collabHeaderLogin", "collabHeaderLogout", "collaborationRetryButton",
-    "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabRetrySync", "collabLogout", "collabFeedback",
+    "collaborationPanel", "collabPageNumber", "collabShowHistory", "collabRetryLoad", "collabRetrySync", "collabLogout", "collabFeedback",
     "cloudLibraryUnlockButton",
     "cloudLibraryStatus",
     "cloudLibraryFiles",
@@ -456,6 +457,14 @@ function wireEvents() {
     }
   });
   bindOptionalClick("collabRetrySync", () => void retryCollaborationSync());
+  bindOptionalClick("collabRetryLoad", () => {
+    if (!state.remoteBookId) return;
+    els.collabRetryLoad.hidden = true;
+    void resumeRemoteProject({
+      sourceName: state.sourceName, sourceSize: state.sourceSize, sourceMime: state.sourceMime,
+      remoteBookId: state.remoteBookId,
+    }, state.activeWorkflow);
+  });
   bindOptionalClick("cloudLibraryUploadButton", () => els.cloudLibraryUploadInput?.click());
   bindOptionalClick("cloudLibraryUnlockButton", () => void unlockCloudLibrary());
   els.cloudLibraryUploadInput?.addEventListener("change", (event) => {
@@ -1302,14 +1311,8 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         type: blob.type || sourceMime || "application/octet-stream",
       }) };
     })();
-    const statePromise = fetch(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
-      credentials: project.apiAccessToken ? "omit" : "same-origin",
-      headers: apiHeaders,
-      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw Object.assign(new Error(payload.detail || `状态 HTTP ${response.status}`), { status: response.status });
-      return payload;
+    const statePromise = fetchCloudBookState(`${baseUrl}/api/books/${encodeURIComponent(project.remoteBookId)}/state`, {
+      credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders,
     }).then((remoteState) => ({ remoteState }), (error) => ({ error }));
     const source = await sourcePromise;
     if (requestId !== state.documentRequestId) return;
@@ -1317,6 +1320,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     let sourceName = source.name || sourceFile?.name || "远程项目.pdf";
     const sourceMime = sourceFile?.type || source.type || "application/pdf";
     state.remoteRestoreInFlight = true;
+    state.remoteStateLoadError = "";
+    if (els.collabRetryLoad) els.collabRetryLoad.hidden = true;
+    setCollaborationFeedback("正在读取云端校对内容…");
     if (source.rangePdf) {
       const loaded = await loadRemotePdfWithRanges(sourceUrl, {
         name: sourceName,
@@ -1337,6 +1343,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     if (stateResult.error) {
       const error = stateResult.error;
       state.remoteRestoreInFlight = false;
+      state.remoteStateLoadError = String(error.message || error);
       if (restoreCachedResults()) await renderCurrentPage();
       if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
         requestCollaborationLogin(project, workflow);
@@ -1346,6 +1353,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
         els.sourceRetryButton.textContent = "重试云端校对状态";
         els.sourceRetryButton.hidden = false;
       }
+      if (els.collabRetryLoad) els.collabRetryLoad.hidden = false;
       setCollaborationFeedback("云端校对状态暂时无法加载；本机修改会保留，重试成功前不会写入云端。", true);
       setStatus(`已打开“${sourceName}”原文；云端校对状态暂时无法加载（${error.message || error}）。本机修改暂不上传，请点“重试云端校对状态”。`, "warn");
       updateCollaborationPageNumber();
@@ -1398,7 +1406,8 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       try { window.localStorage.setItem(`${cacheKey}:before-cloud-restore`, previousLocalCache); }
       catch (error) { console.warn("Could not preserve pre-restore local cache", error); }
     }
-    restoreCachedResults(restoredCache);
+    const restored = restoreCachedResults(restoredCache);
+    requireRestoredCloudResults(restoredCache, restored);
     if (state.remoteServerPdf) {
       // The preview runs independently. New collaborators have no cached text
       // to display while it is pending, so restore the cloud panels now.
@@ -1419,6 +1428,8 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
     state.remoteRestoreComplete = true;
+    state.remoteStateLoadError = "";
+    if (els.collabRetryLoad) els.collabRetryLoad.hidden = true;
     if (isCloudDeployment() && project.remoteBookId) {
       const url = new URL(window.location.href);
       url.searchParams.set("book_id", project.remoteBookId);
@@ -1444,6 +1455,9 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
     state.remoteRestoreInFlight = false;
+    state.remoteStateLoadError = String(error.message || error);
+    if (els.collabRetryLoad && state.pageCount) els.collabRetryLoad.hidden = false;
+    setCollaborationFeedback(`云端校对内容恢复失败：${error.message || error}；请点击“重试加载校对”。`, true);
     if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
       requestCollaborationLogin(project, workflow);
       return;
@@ -1454,6 +1468,34 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       if (els.sourceRetryButton) els.sourceRetryButton.hidden = false;
     }
     setStatus(`云端项目恢复失败：${error.message || error}`, "error");
+  }
+}
+
+function requireRestoredCloudResults(cloudCache, restored) {
+  const savedPages = Object.keys(cloudCache.ocrResults || {}).length + Object.keys(cloudCache.translationResults || {}).length;
+  if (savedPages && !restored) throw new Error("校对内容恢复失败，云端数据仍保留；请重试加载校对");
+}
+
+async function fetchCloudBookState(url, options = {}, timeoutMs = 45000) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw Object.assign(new Error(payload.detail || `状态 HTTP ${response.status}`), { status: response.status });
+        return payload;
+      })(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(() => {
+          reject(new Error("云端校对状态请求超时"));
+          controller.abort();
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
   }
 }
 
@@ -3119,6 +3161,7 @@ function resetDocumentState() {
   state.remoteFirstPageDeadline = 0;
   state.remotePreviewError = "";
   state.remoteRestoreComplete = false;
+  state.remoteStateLoadError = "";
   if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
   state.pdfUrl = "";
   state.pdfFile = null;
@@ -4115,7 +4158,7 @@ async function renderCurrentPdfPageWithLocalService(token) {
     state.remotePreviewError = "";
     els.pdfCanvas.style.display = "none";
     els.emptyState.style.display = "none";
-    if (els.sourceRetryButton) els.sourceRetryButton.hidden = true;
+    if (els.sourceRetryButton && !state.remoteStateLoadError) els.sourceRetryButton.hidden = true;
     applySourcePageZoom();
     return true;
   } catch (error) {
