@@ -169,7 +169,7 @@ let lastProofreadSelectionPoint = null;
 const state = {
   pdfDoc: null,
   remoteServerPdf: false,
-  remotePreviewPending: false,
+  remoteInitialPreviewStarted: false,
   remoteFirstPageDeadline: 0,
   remotePreviewError: "",
   remoteRestoreComplete: false,
@@ -1348,11 +1348,12 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       const error = stateResult.error;
       state.remoteRestoreInFlight = false;
       state.remoteStateLoadError = String(error.message || error);
-      if (restoreCachedResults()) await renderCurrentPage();
+      if (restoreCachedResults()) updateOcrPanelForPage();
       if (error.status === 401 && cloudLibrary.authMode === "collaboration") {
         requestCollaborationLogin(project, workflow);
         return;
       }
+      startRemotePdfInitialPreview(requestId);
       if (els.sourceRetryButton) {
         els.sourceRetryButton.textContent = "重试云端校对状态";
         els.sourceRetryButton.hidden = false;
@@ -1413,10 +1414,11 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     const restored = restoreCachedResults(restoredCache);
     requireRestoredCloudResults(restoredCache, restored);
     if (state.remoteServerPdf) {
-      // The preview runs independently. New collaborators have no cached text
-      // to display while it is pending, so restore the cloud panels now.
+      // Show saved model text and enqueue visible line crops before the lower
+      // priority full-page image starts rendering.
       updateOcrPanelForPage();
       updateTranslationPanelForPage();
+      startRemotePdfInitialPreview(requestId);
     } else {
       await renderCurrentPage();
     }
@@ -1469,6 +1471,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       requestCollaborationLogin(project, workflow);
       return;
     }
+    startRemotePdfInitialPreview(requestId);
     if (!state.pageCount || els.emptyState.style.display !== "none") {
       els.emptyState.style.display = "grid";
       els.emptyState.textContent = `云端 PDF 首页载入失败：${error.name === "AbortError" ? "请求超时" : error.message || error}。请点下方按钮重试。`;
@@ -1635,6 +1638,7 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
 
 async function loadRemotePdfWithServerPages(bookId, requestId) {
   state.remoteServerPdf = true;
+  state.remoteInitialPreviewStarted = false;
   state.remotePreviewError = "";
   state.remoteFirstPageDeadline = Date.now() + 240000;
   state.sourceType = "pdf";
@@ -1651,10 +1655,15 @@ async function loadRemotePdfWithServerPages(bookId, requestId) {
   els.ocrTitle.textContent = "第 1 页 OCR";
   restoreCachedResults();
   refreshControls();
-  setStatus(`已读取 ${state.pageCount} 页，正在生成首页原文…`, "warn");
-  // Do not gate cloud-state restoration on downloading/decoding the preview.
-  // renderCurrentPage owns the visible error and retry control.
-  void renderCurrentPage().then(() => {
+  setStatus(`已读取 ${state.pageCount} 页，正在恢复云端校对内容…`, "warn");
+  return true;
+}
+
+function startRemotePdfInitialPreview(requestId) {
+  if (!state.remoteServerPdf || !state.pageCount || state.remoteInitialPreviewStarted || requestId !== state.documentRequestId) return;
+  state.remoteInitialPreviewStarted = true;
+  // Give visible right-column crops a chance to enter the server render queue.
+  window.setTimeout(() => void renderCurrentPage().then(() => {
     if (requestId !== state.documentRequestId) return;
     state.remoteFirstPageDeadline = 0;
     scheduleIdleWork(() => {
@@ -1663,8 +1672,7 @@ async function loadRemotePdfWithServerPages(bookId, requestId) {
         buildPdfThumbnails();
       }
     });
-  }).catch((error) => console.warn("First page preview unavailable", error));
-  return true;
+  }).catch((error) => console.warn("First page preview unavailable", error)), 1200);
 }
 
 async function findCachedRemoteSource(project) {
@@ -3215,7 +3223,7 @@ function resetDocumentState() {
 
   state.pdfDoc = null;
   state.remoteServerPdf = false;
-  state.remotePreviewPending = false;
+  state.remoteInitialPreviewStarted = false;
   state.remoteFirstPageDeadline = 0;
   state.remotePreviewError = "";
   state.remoteRestoreComplete = false;
@@ -4117,7 +4125,6 @@ async function renderCurrentPage() {
   }
 
   const token = ++state.renderToken;
-  if (state.remoteServerPdf) state.remotePreviewPending = true;
   try {
     if (state.remoteServerPdf || (isCloudDeployment() && state.remoteBookId && window.matchMedia("(max-width: 760px)").matches)) {
       if (await renderCurrentPdfPageWithLocalService(token)) {
@@ -4186,11 +4193,6 @@ async function renderCurrentPage() {
     updateTranslationPanelForPage();
     updateThumbnailState();
     deferCurrentPageSourceHydration(state.pageNum, token);
-  } finally {
-    if (token === state.renderToken && state.remoteServerPdf) {
-      state.remotePreviewPending = false;
-      drainLinePreviewQueue();
-    }
   }
 }
 
@@ -8170,7 +8172,6 @@ function queueLinePreview(task) {
 }
 
 function drainLinePreviewQueue() {
-  if (state.remotePreviewPending) return;
   while (activeLinePreviews < 2 && linePreviewQueue.length) {
     const next = linePreviewQueue.shift();
     activeLinePreviews += 1;

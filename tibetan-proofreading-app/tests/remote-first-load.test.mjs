@@ -20,13 +20,31 @@ function setup() {
   return c;
 }
 
-test('no-cache PDF metadata returns while first preview is still pending', async () => {
+test('no-cache PDF metadata does not start the full-page image before OCR state', async () => {
   const c = setup();
   const result = await Promise.race([
     vm.runInContext("loadRemotePdfWithServerPages('book',1)", c),
     new Promise(resolve => setTimeout(() => resolve('blocked'), 50)),
   ]);
-  assert.equal(result, true, 'cloud state restoration must not wait for the image');
+  assert.equal(result, true);
+  assert.equal(vm.runInContext('state.remoteInitialPreviewStarted', c), false);
+});
+
+test('full-page image starts once after right-column OCR panels have loaded', async () => {
+  const c = setup();
+  await vm.runInContext("loadRemotePdfWithServerPages('book',1)", c);
+  vm.runInContext(`
+    var renderCalls = 0;
+    var scheduledPreview;
+    renderCurrentPage = () => { renderCalls += 1; return Promise.resolve(); };
+    window.setTimeout = (callback) => { scheduledPreview = callback; return 1; };
+    startRemotePdfInitialPreview(1);
+    startRemotePdfInitialPreview(1);
+  `, c);
+  assert.equal(vm.runInContext('renderCalls', c), 0);
+  assert.equal(vm.runInContext('state.remoteInitialPreviewStarted', c), true);
+  vm.runInContext('scheduledPreview()', c);
+  assert.equal(vm.runInContext('renderCalls', c), 1);
 });
 
 test('image decode that never settles has a bounded failure', async () => {
