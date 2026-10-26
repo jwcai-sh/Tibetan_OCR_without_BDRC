@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261025-whole-page-v18";
+const APP_BUILD_ID = "20261026-annotation-sync-v26";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -1444,11 +1444,14 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       els.sourceRetryButton.textContent = "重试加载当前页";
     }
     setCollaborationFeedback("");
-    if (els.collabRetrySync) els.collabRetrySync.hidden = true;
+    if (els.collabRetrySync) {
+      els.collabRetrySync.hidden = !pendingPages.length;
+      els.collabRetrySync.textContent = pendingPages.length ? "同步本机校对" : "重试云端同步";
+    }
     if (state.remotePreviewError) {
       setStatus(`云端校对内容已恢复；原文预览加载失败：${state.remotePreviewError}。请重试加载当前页。`, "warn");
     } else if (pendingPages.length && !remoteState.collaboration_degraded) {
-      setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请逐页复核并修改后同步。`, "warn");
+      setStatus(`已保留本机第 ${pendingPages.join("、")} 页较新的校对内容；请复核后点击“同步本机校对”。`, "warn");
     } else {
       setStatus(remoteState.collaboration_degraded
         ? `已打开“${sourceName}”及云端最近保存的校对进度。${remoteState.collaboration_message || "协作数据库暂不可用，修改暂时无法同步。"}`
@@ -1531,7 +1534,15 @@ function mergeNewerLocalCloudState(cloudCache, localRaw, bookId) {
       if (cloudHasPage && (!localTime || localTime <= cloudTime)) continue;
       const visibleContent = (ocr, translation, reviews) => JSON.stringify({
         ocrText: ocr?.text || "",
-        lines: (ocr?.lines || []).map((line) => ({ text: line.text || "", deleted: Boolean(line.deleted) })),
+        lines: (ocr?.lines || []).map((line) => ({
+          text: line.text || "",
+          deleted: Boolean(line.deleted),
+          manualBaselineText: line.manualBaselineText ?? null,
+          manuallyEdited: Boolean(line.manuallyEdited),
+          manualErrorChars: Number(line.manualErrorChars || 0),
+          manualEditRanges: line.manualEditRanges || [],
+        })),
+        compare: ocr?.compare || null,
         translationText: translation?.text || "",
         reviews,
       });
@@ -3540,7 +3551,10 @@ async function flushRemoteStateSaves() {
             ? `当前修改已同步；本机第 ${[...state.remoteDeferredPages].join("、")} 页仍待复核同步。`
             : "云端校对状态已同步。", state.remoteDeferredPages.size ? "warn" : "ok");
         }
-        if (els.collabRetrySync) els.collabRetrySync.hidden = true;
+        if (els.collabRetrySync) {
+          els.collabRetrySync.hidden = !state.remoteDeferredPages.size;
+          els.collabRetrySync.textContent = state.remoteDeferredPages.size ? "同步本机校对" : "重试云端同步";
+        }
         setCollaborationFeedback("");
       } catch (error) {
         if (state.remoteBookId !== bookId) break;
@@ -3606,6 +3620,7 @@ async function retryCollaborationSync() {
     if (await saved === false) throw new Error("本机后备存储保存失败，请保留页面并导出备份。");
     if (!state.remoteRestoreComplete) return;
     els.collabRetrySync.hidden = true;
+    els.collabRetrySync.textContent = "重试云端同步";
     if (els.sourceRetryButton) {
       els.sourceRetryButton.hidden = true;
       els.sourceRetryButton.textContent = "重试加载当前页";
