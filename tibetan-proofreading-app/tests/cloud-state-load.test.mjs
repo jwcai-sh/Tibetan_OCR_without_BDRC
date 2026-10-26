@@ -31,4 +31,12 @@ const truncated = makeLoader([{ status: 200, body: {} }, { status: 200, body: ex
 assert.deepEqual(await truncated.load("/api/books/book-1/state"), expected);
 assert.equal(truncated.calls(), 2, "never accept an empty successful response as saved state");
 
+const slow = makeLoader([
+  new Error("network stalled"),
+  { status: 503, body: { detail: "暂时不可用" } },
+  { status: 200, body: expected },
+]);
+assert.deepEqual(await slow.load("/api/books/book-1/state", {}, 5), expected);
+assert.equal(slow.calls(), 3, "a new collaborator can recover from two transient failures without reopening the book");
+
 console.log("Cloud state loading retries transient failures and rejects incomplete data");

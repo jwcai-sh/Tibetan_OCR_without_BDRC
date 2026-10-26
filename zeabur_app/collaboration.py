@@ -60,9 +60,9 @@ def _connect():
     except ImportError as exc:  # pragma: no cover - deployment configuration
         raise HTTPException(503, "协作数据库驱动未安装") from exc
     try:
-        connect_timeout = int(_env("COLLAB_DB_CONNECT_TIMEOUT") or "3")
+        connect_timeout = int(_env("COLLAB_DB_CONNECT_TIMEOUT") or "10")
     except ValueError:
-        connect_timeout = 3
+        connect_timeout = 10
     connect_timeout = min(max(connect_timeout, 1), 15)
     return psycopg.connect(
         host=_env("COLLAB_DB_HOST"), port=int(_env("COLLAB_DB_PORT") or "5432"),

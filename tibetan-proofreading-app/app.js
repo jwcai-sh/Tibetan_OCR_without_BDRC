@@ -455,7 +455,7 @@ function wireEvents() {
         remoteBookId: state.remoteBookId,
       }, state.activeWorkflow);
     } else if (state.pageCount) {
-      state.remoteFirstPageDeadline = Date.now() + 120000;
+      state.remoteFirstPageDeadline = Date.now() + 240000;
       void renderCurrentPage().catch(() => {});
     }
   });
@@ -1291,7 +1291,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       let sourceMime = project.sourceMime || "";
       let sourceSize = Number(project.sourceSize) || 0;
       {
-        const probe = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: { Range: "bytes=0-0", ...apiHeaders } });
+        const probe = await fetchWithCloudTimeout(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: { Range: "bytes=0-0", ...apiHeaders } }, 60000, 2);
         if (!probe.ok) throw Object.assign(new Error(`源文件 HTTP ${probe.status}`), { status: probe.status });
         const disposition = probe.headers.get("content-disposition") || "";
         const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
@@ -1307,7 +1307,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
       if (isPdfFile(pdfDescriptor)) {
         return { rangePdf: true, name: sourceName, type: sourceMime, size: sourceSize };
       }
-      const response = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders });
+      const response = await fetchWithCloudTimeout(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders }, 120000, 2);
       if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       return { file: new File([blob], sourceName, {
@@ -1366,7 +1366,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     sourceName = remoteState.sourceName || remoteState.name || sourceName;
     let sourceReloadRequired = false;
     if (sourceFile && remoteState.size && sourceFile.size !== Number(remoteState.size)) {
-      const response = await fetch(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders });
+      const response = await fetchWithCloudTimeout(sourceUrl, { credentials: project.apiAccessToken ? "omit" : "same-origin", headers: apiHeaders }, 120000, 2);
       if (!response.ok) throw Object.assign(new Error(`源文件 HTTP ${response.status}`), { status: response.status });
       const blob = await response.blob();
       sourceFile = new File([blob], sourceName, { type: blob.type || remoteState.content_type || project.sourceMime || "application/pdf" });
@@ -1482,15 +1482,16 @@ function requireRestoredCloudResults(cloudCache, restored) {
   if (savedPages && !restored) throw new Error("校对内容恢复失败，云端数据仍保留；请重试加载校对");
 }
 
-async function fetchCloudBookState(url, options = {}, timeoutMs = 30000) {
+async function fetchCloudBookState(url, options = {}, timeoutMs = 60000) {
   let lastError;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await fetchCloudBookStateOnce(url, options, timeoutMs);
     } catch (error) {
       lastError = error;
-      if (attempt || [401, 403, 404, 409].includes(error.status)) throw error;
+      if (attempt === 2 || [401, 403, 404, 409].includes(error.status)) throw error;
       setCollaborationFeedback("云端校对状态读取较慢，正在自动重试…");
+      if (timeoutMs >= 1000) await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -1634,11 +1635,11 @@ async function loadRemotePdfWithRanges(sourceUrl, descriptor, remoteBookId, requ
 async function loadRemotePdfWithServerPages(bookId, requestId) {
   state.remoteServerPdf = true;
   state.remotePreviewError = "";
-  state.remoteFirstPageDeadline = Date.now() + 120000;
+  state.remoteFirstPageDeadline = Date.now() + 240000;
   state.sourceType = "pdf";
   const response = await fetchWithCloudTimeout(
     `${window.location.origin}/api/books/${encodeURIComponent(bookId)}/document-info`,
-    { credentials: "same-origin" }, 120000,
+    { credentials: "same-origin" }, 120000, 2,
   );
   const info = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(new Error(info.detail || `云端 PDF 页数 HTTP ${response.status}`), { status: response.status });
@@ -1695,7 +1696,7 @@ async function initializeCloudLibrary() {
   els.cloudLibraryAuthHint.textContent = "请稍候，正在检查协作者登录状态。";
   setCloudLibraryStatus("正在连接云端目录…");
   try {
-    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl}/api/collaboration/config`, {}, 15000);
+    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl}/api/collaboration/config`, {}, 30000, 2);
     if (!response.ok) throw new Error(`协作配置 HTTP ${response.status}`);
     const config = await response.json();
     cloudLibrary.authMode = config.enabled ? "collaboration" : "legacy";
@@ -1718,7 +1719,7 @@ async function initializeCloudLibrary() {
       const meResponse = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl}/api/collaboration/me`, {
         credentials: isCloudDeployment() ? "same-origin" : "omit",
         headers: meHeaders,
-      }, 15000);
+      }, 30000, 2);
       if (meResponse.ok) cloudLibrary.actor = (await meResponse.json()).name || "";
       else if (meResponse.status !== 401) throw new Error(`协作者状态 HTTP ${meResponse.status}`);
       else if (isLocalWorkbench() && cloudLibrary.accessToken) {
@@ -1766,10 +1767,30 @@ async function initializeCloudLibrary() {
   if (retryAfterFailedBoot) void restoreRouteFromLocation();
 }
 
-async function fetchWithCloudTimeout(url, options = {}, timeoutMs = 120000) {
-  const controller = new AbortController();
-  window.setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-  return fetch(url, { ...options, signal: controller.signal });
+async function fetchWithCloudTimeout(url, options = {}, timeoutMs = 120000, maxAttempts = 1) {
+  const retryable = String(options.method || "GET").toUpperCase() === "GET";
+  for (let attempt = 0; attempt < Math.max(1, maxAttempts); attempt += 1) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      const response = await Promise.race([
+        fetch(url, { ...options, signal: controller.signal }),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(() => {
+            controller.abort();
+            reject(new Error("云端请求超时"));
+          }, Math.max(1, timeoutMs));
+        }),
+      ]);
+      if (!retryable || attempt + 1 >= maxAttempts || ![429, 502, 503, 504].includes(response.status)) return response;
+      await response.body?.cancel();
+    } catch (error) {
+      if (!retryable || attempt + 1 >= maxAttempts || options.signal?.aborted) throw error;
+    } finally {
+      window.clearTimeout(timer);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 700 * (attempt + 1)));
+  }
 }
 
 async function unlockCloudLibrary() {
@@ -1780,7 +1801,7 @@ async function unlockCloudLibrary() {
   }
   if (cloudLibrary.authMode === "collaboration") {
     try {
-      const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/collaboration/login`, {
+      const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/collaboration/login`, {
         method: "POST", credentials: isCloudDeployment() ? "same-origin" : "omit", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: isLocalWorkbench()
@@ -1788,7 +1809,7 @@ async function unlockCloudLibrary() {
             : els.collabHeaderName?.value || document.getElementById("collaboratorName")?.value || "",
           password: token,
         }),
-      });
+      }, 45000);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
       cloudLibrary.actor = payload.name;
@@ -1834,7 +1855,7 @@ async function refreshCloudLibrary() {
     if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
     const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library`, {
       credentials: isCloudDeployment() ? "same-origin" : "omit", headers,
-    }, 30000);
+    }, 60000, 2);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw Object.assign(new Error(payload.detail || `HTTP ${response.status}`), { status: response.status });
     cloudLibrary.items = Array.isArray(payload.items) ? payload.items.filter((item) => typeof item.path === "string") : [];
@@ -1923,7 +1944,7 @@ function updateCollaborationPageNumber() {
 async function showPageHistory() {
   if (!state.remoteBookId) return setCollaborationFeedback("请先打开一本文档。", true);
   try {
-    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/history/${state.pageNum}`, { credentials: "same-origin" });
+    const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/history/${state.pageNum}`, { credentials: "same-origin" }, 60000, 2);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     const rows = payload.items || [];
@@ -2050,12 +2071,12 @@ async function openCloudLibraryFile(file) {
   try {
     const headers = { "Content-Type": "application/json", ...(cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {}) };
     if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
-    const response = await fetch(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library/open`, {
+    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library/open`, {
       method: "POST",
       credentials: isCloudDeployment() ? "same-origin" : "omit",
       headers,
       body: JSON.stringify({ path: file.path }),
-    });
+    }, 120000);
     const book = await response.json().catch(() => ({}));
     if (requestId !== state.documentRequestId) return;
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
@@ -3541,7 +3562,7 @@ async function flushRemoteStateSaves() {
         const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(90000) : undefined,
+          signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(120000) : undefined,
           body: JSON.stringify({
             ...metadata,
             book_id: bookId,
@@ -3607,12 +3628,12 @@ async function retryCollaborationSync() {
   els.collabRetrySync.disabled = true;
   setCollaborationFeedback("正在核对云端版本并重试同步…");
   try {
-    const response = await fetch(`${window.location.origin}/api/books/${encodeURIComponent(bookId)}/state`, {
-      credentials: "same-origin",
-      signal: typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(45000) : undefined,
+    const apiBaseUrl = cloudLibrary.apiBaseUrl || window.location.origin;
+    const remote = await fetchCloudBookState(`${apiBaseUrl}/api/books/${encodeURIComponent(bookId)}/state`, {
+      credentials: isCloudDeployment() ? "same-origin" : "omit",
+      headers: isLocalWorkbench() && cloudLibrary.accessToken ? { Authorization: `Bearer ${cloudLibrary.accessToken}` } : {},
     });
-    const remote = await response.json().catch(() => ({}));
-    if (!response.ok || remote.collaboration_degraded) throw new Error(remote.detail || "协作数据库暂不可用");
+    if (remote.collaboration_degraded) throw new Error(remote.collaboration_message || "协作数据库暂不可用");
     if (state.remoteBookId !== bookId) return;
     const current = {
       ocrResults: serializeResultMap(state.ocrResults),
@@ -4206,7 +4227,7 @@ async function renderCurrentPdfPageWithLocalService(token) {
   }
 }
 
-async function decodeSourcePreview(image, timeoutMs = 15000) {
+async function decodeSourcePreview(image, timeoutMs = 45000) {
   let timer;
   try {
     await Promise.race([
@@ -4255,10 +4276,10 @@ function getBatchPdfRenderDpi(width, height, requestedDpi) {
 async function renderPdfPageBlobWithLocalService(pageNum, dpi, format = "png") {
   if (!state.pdfFile && isCloudDeployment() && state.remoteBookId) {
     const timeoutMs = state.remoteFirstPageDeadline
-      ? Math.max(1, state.remoteFirstPageDeadline - Date.now()) : 120000;
+      ? Math.min(120000, Math.max(1, state.remoteFirstPageDeadline - Date.now())) : 120000;
     const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books/${encodeURIComponent(state.remoteBookId)}/pages/${pageNum}/preview?dpi=${dpi}&format=${format}`, {
       credentials: "same-origin",
-    }, timeoutMs);
+    }, timeoutMs, 2);
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw Object.assign(new Error(payload.detail || `云端单页预览 HTTP ${response.status}`), { status: response.status });
@@ -5296,7 +5317,7 @@ async function extractCurrentPdfPageText() {
     const pageNum = state.pageNum;
     const response = await fetchWithCloudTimeout(
       `${window.location.origin}/api/books/${encodeURIComponent(bookId)}/pages/${pageNum}/text`,
-      { credentials: "same-origin" }, 30000,
+      { credentials: "same-origin" }, 60000, 2,
     );
     const payload = await response.json().catch(() => ({}));
     if (bookId !== state.remoteBookId || pageNum !== state.pageNum) throw new Error("页面已切换，丢弃过期的 PDF 文本层结果");

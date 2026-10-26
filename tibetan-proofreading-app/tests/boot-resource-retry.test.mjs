@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]?.[1];
+assert.match(inline, /window\.setTimeout\(window\.__tibetanWorkbenchBootFailure, 90000\)/,
+  'slow cross-region asset loads must not be treated as failed after 30 seconds');
 
 function boot(store = new Map()) {
   const nodes = Object.fromEntries(['collaborationActorLabel', 'cloudLibraryAuthTitle', 'cloudLibraryAuthHint', 'collaborationRetryButton'].map(id => [id, { textContent: '', hidden: true }]));

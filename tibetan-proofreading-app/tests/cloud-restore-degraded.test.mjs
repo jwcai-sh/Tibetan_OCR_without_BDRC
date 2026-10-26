@@ -5,29 +5,32 @@ const app = readFileSync(new URL("../app.js", import.meta.url), "utf8");
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const restore = app.slice(app.indexOf("async function resumeRemoteProject("), app.indexOf("async function findCachedRemoteSource("));
 const rangedLoader = app.slice(app.indexOf("async function loadRemotePdfWithRanges("), app.indexOf("async function findCachedRemoteSource("));
+const fingerprintSource = app.slice(app.indexOf("function remotePageFingerprint("), app.indexOf("function serializeResultMap("));
 
 assert.ok(restore.indexOf("await loadFile(sourceFile") < restore.indexOf("await statePromise"),
   "load the source document before waiting for collaborative state");
 assert.match(restore, /协作数据库暂时不可用|云端校对状态暂时无法加载/,
   "show a clear degraded-state message without discarding the loaded source");
-assert.match(restore, /AbortSignal\.timeout\(45000\)/,
-  "allow enough time for the cross-region collaboration database to return cloud state");
+assert.match(restore, /fetchCloudBookState\(/,
+  "read cloud state with the guarded retry path while source loading proceeds");
+assert.match(app, /async function fetchCloudBookState\(url, options = \{\}, timeoutMs = 60000\)/,
+  "allow a slow cross-region response before retrying cloud state");
 const remoteSave = app.slice(app.indexOf("function scheduleRemoteStateSave("), app.indexOf("function remotePageFingerprint("));
 assert.match(remoteSave, /response\.ok[\s\S]*?state\.remotePageRevisions\s*=[\s\S]*?setStatus\("云端校对状态已同步。", "ok"\)/,
   "clear an old synchronization warning after a confirmed remote save");
 assert.match(restore, /mergeNewerLocalCloudState\(/,
   "compare saved local proofreading results before replacing the cloud cache");
-assert.match(restore, /localPending[\s\S]*?saveCachedResults\(\{ immediateRemote: true \}\)/,
-  "sync newer local proofreading results only after cloud page revisions are restored");
+assert.match(restore, /state\.remoteDeferredPages = new Set\(pendingPages\)/,
+  "hold newer local proofreading pages for explicit revision-checked synchronization");
 const mergeSource = app.slice(app.indexOf("function mergeNewerLocalCloudState("), app.indexOf("function requestCollaborationLogin("));
-const merge = new Function("OCR_PROFILES", "console", `${mergeSource}\nreturn mergeNewerLocalCloudState;`)({ traditional: {} }, console);
-const cloud = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:00:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "cloud" } }, translationResults: {}, ocrQualityReviews: [] };
-const local = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:01:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "local edit" }, 2: { text: "local page" } }, translationResults: {}, ocrQualityReviews: [] };
+const merge = new Function("OCR_PROFILES", "console", `${fingerprintSource}\n${mergeSource}\nreturn mergeNewerLocalCloudState;`)({ traditional: {} }, console);
+const cloud = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:00:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "cloud", updatedAt: "2026-10-20T11:00:00Z" } }, translationResults: {}, ocrQualityReviews: [] };
+const local = { remoteBookId: "book-1", pageCount: 24, updatedAt: "2026-10-20T11:01:00Z", ocrProfile: "traditional", ocrResults: { 1: { text: "local edit", updatedAt: "2026-10-20T11:01:00Z" }, 2: { text: "local page", updatedAt: "2026-10-20T11:01:00Z" } }, translationResults: {}, ocrQualityReviews: [] };
 assert.equal(merge(cloud, JSON.stringify(local), "book-1").localPending, true);
 assert.deepEqual(merge(cloud, JSON.stringify(local), "book-1").payload.ocrResults, local.ocrResults,
   "a newer local correction and an unsynced page survive cloud restoration");
-assert.equal(merge(cloud, JSON.stringify({ ...local, updatedAt: "2026-10-20T10:59:00Z" }), "book-1").localPending, false,
-  "older local state does not replace newer cloud work");
+assert.equal(merge(cloud, JSON.stringify({ ...local, updatedAt: "2026-10-20T10:59:00Z", ocrResults: { 1: { text: "old local", updatedAt: "2026-10-20T10:59:00Z" } } }), "book-1").localPending, false,
+  "older local page data does not replace newer cloud work");
 assert.equal(merge(cloud, JSON.stringify({ ...local, remoteBookId: "another-book" }), "book-1").localPending, false,
   "another book's local state is never merged");
 assert.match(restore, /loadRemotePdfWithRanges/, "uncached cloud PDFs should use PDF.js range loading");

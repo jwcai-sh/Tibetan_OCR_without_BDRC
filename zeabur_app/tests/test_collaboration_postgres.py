@@ -90,7 +90,7 @@ class CollaborationPostgresTests(unittest.TestCase):
         self.assertEqual(self.calls[0]["dbname"], "ocr_workbench")
         self.assertEqual(self.calls[0]["port"], 5432)
         self.assertEqual(self.calls[0]["options"], "-c search_path=tibetan_collab,public")
-        self.assertEqual(self.calls[0]["connect_timeout"], 3)
+        self.assertEqual(self.calls[0]["connect_timeout"], 10)
 
     def test_initialize_uses_existing_schema_without_database_create_privilege(self):
         self.collaboration._initialize_schema()
