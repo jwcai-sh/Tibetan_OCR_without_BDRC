@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import hashlib
 import hmac
 import logging
@@ -391,11 +392,27 @@ async def create_book(request: Request, file: UploadFile = File(...)) -> dict[st
     return metadata
 
 
-@app.get("/api/books/{book_id}/state")
-def get_book_state(book_id: str) -> dict[str, Any]:
+def cloud_state_response(state: dict[str, Any], request: Request) -> dict[str, Any] | Response:
+    # The complete proofreading state includes every page's OCR, annotations and
+    # revisions. Compress only this JSON response; PDF ranges must stay untouched.
+    if "gzip" not in request.headers.get("accept-encoding", "").lower():
+        return state
+    body = json.dumps(state, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(body) < 4096:
+        return state
+    return Response(
+        gzip.compress(body, compresslevel=5, mtime=0),
+        media_type="application/json",
+        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding", "Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/books/{book_id}/state", response_model=None)
+def get_book_state(book_id: str, request: Request) -> dict[str, Any] | Response:
     if collaboration.configured():
         try:
-            return collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+            state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json"))
+            return cloud_state_response(state, request)
         except Exception as exc:
             logging.warning("Collaboration state unavailable for book %s; trying OSS snapshot: %s", book_id, type(exc).__name__)
             try:
@@ -405,8 +422,8 @@ def get_book_state(book_id: str) -> dict[str, Any]:
             snapshot["collaboration_degraded"] = True
             snapshot["collaboration_message"] = "协作数据库暂时无法连接，当前显示云端最近保存的状态。修改暂时无法同步。"
             snapshot.setdefault("page_revisions", {})
-            return snapshot
-    return read_json(book_id, "state.json")
+            return cloud_state_response(snapshot, request)
+    return cloud_state_response(read_json(book_id, "state.json"), request)
 
 
 @app.get("/api/books/{book_id}/source")

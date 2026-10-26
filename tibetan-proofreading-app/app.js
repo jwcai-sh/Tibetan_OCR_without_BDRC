@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261026-annotation-sync-v26";
+const APP_BUILD_ID = "20261026-cloud-state-load-v27";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -1482,15 +1482,35 @@ function requireRestoredCloudResults(cloudCache, restored) {
   if (savedPages && !restored) throw new Error("校对内容恢复失败，云端数据仍保留；请重试加载校对");
 }
 
-async function fetchCloudBookState(url, options = {}, timeoutMs = 45000) {
+async function fetchCloudBookState(url, options = {}, timeoutMs = 30000) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await fetchCloudBookStateOnce(url, options, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      if (attempt || [401, 403, 404, 409].includes(error.status)) throw error;
+      setCollaborationFeedback("云端校对状态读取较慢，正在自动重试…");
+    }
+  }
+  throw lastError;
+}
+
+async function fetchCloudBookStateOnce(url, options, timeoutMs) {
   const controller = new AbortController();
   let timer;
   try {
     return await Promise.race([
       (async () => {
         const response = await fetch(url, { ...options, signal: controller.signal });
-        const payload = await response.json().catch(() => ({}));
+        const payload = await response.json().catch(() => {
+          throw new Error("云端校对状态响应不完整");
+        });
         if (!response.ok) throw Object.assign(new Error(payload.detail || `状态 HTTP ${response.status}`), { status: response.status });
+        if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+            !payload.ocr_results && !payload.ocrResults && !payload.translation_results && !payload.translationResults) {
+          throw new Error("云端校对状态缺少识别结果");
+        }
         return payload;
       })(),
       new Promise((_, reject) => {
