@@ -4989,8 +4989,12 @@ function mergeRecognizedModelResults(previous, incoming, source, incomingLines, 
 function saveOcrResultFromParsed(parsed, source, statusMessage, fallbackLines = [], preferredView = "lines") {
   const text = getParsedOcrText(parsed);
   const rawLines = getParsedOcrLines(parsed);
-  const lines = rawLines.length ? rawLines : makeOcrLinesFromText(text, fallbackLines);
+  let lines = rawLines.length ? rawLines : makeOcrLinesFromText(text, fallbackLines);
   const recognizedAt = new Date().toISOString();
+  if (!state.ocrResults.has(state.pageNum) && (source === "ai-vision" || (source === "bdrc-ai" && parsed.compare?.llm?.text))) {
+    lines = lines.map(line => !isDiagnosticOcrLine(line) && String(line.text || "").trim()
+      ? {...line, adoptedProvider: "llm"} : line);
+  }
   const previous = getOcrSourceCompare(state.ocrResults.get(state.pageNum));
   const compare = mergeRecognizedModelResults(previous, parsed.compare, source, lines, text);
   if (source === "ai-vision" && compare?.llm) {
@@ -6938,6 +6942,9 @@ function renderProofreadChoiceSelect(index, savedSide, candidateLabel = "Gemini"
   select.setAttribute("aria-label", `第 ${index + 1} 行采用版本`);
   const choices = showGemini ? [["llm", candidateLabel]] : [];
   if (compare?.qwenReviews?.some((review) => review.index === index && !["pending-review", "aligned-pending-review"].includes(review.alignmentStatus))) choices.push(["qwen", "千问候选"]);
+  if (savedSide === "bdrc") choices.push(["bdrc", "BDRC"]);
+  if (savedSide === "qwen" && !choices.some(([value]) => value === "qwen")) choices.push(["qwen", "千问（已采用）"]);
+  if (savedSide === "openai") choices.push(["openai", "OpenAI（已采用）"]);
   // OpenAI candidates remain stored, but are hidden until API access is enabled.
   if (!choices.length) choices.push(["none", "待识别"]);
   choices.forEach(([value, text]) => {
