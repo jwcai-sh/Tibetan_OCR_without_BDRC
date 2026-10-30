@@ -25,7 +25,7 @@
     section { min-width: 0; padding: 12px; background: white; border: 1px solid #d8e1ea; border-radius: 9px; }
     h2 { margin: 0; font-size: 17px; }
     .heading { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
-    .heading button { margin-left: auto; }
+    .heading button:first-of-type { margin-left: auto; }
     .image-viewport { max-height: 58vh; overflow: auto; text-align: center; }
     #pageScan { display: block; width: 100%; height: auto; margin: auto; }
     .model-text, #correctedText { white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-family: "Noto Serif Tibetan", "Kailasa", serif; font-size: 23px; line-height: 1.65; }
@@ -65,6 +65,6 @@
     <section><div class="heading"><h2>Yigdzin1</h2></div><div id="yigdzin1Text" class="model-text"></div></section>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 4 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261030-v1" defer></script>
+  <script src="./whole-page-proofread.js?v=20261030-v2" defer></script>
 </body>
 </html>

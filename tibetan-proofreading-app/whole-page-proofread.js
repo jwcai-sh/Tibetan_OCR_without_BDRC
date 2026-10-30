@@ -190,6 +190,7 @@
       state.pages[key] = pages;
       renderCandidate(key);
       feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
+      root.document.querySelector('.import-controls').open = false;
     } catch (error) { feedback(`${MODEL_LABELS[key]} 导入失败：${error.message}`, true); }
   }
 
