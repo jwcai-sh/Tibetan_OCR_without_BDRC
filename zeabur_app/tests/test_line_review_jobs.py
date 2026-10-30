@@ -58,6 +58,18 @@ class LineReviewJobsTest(unittest.TestCase):
         self.assertEqual(self.submit(model='different-model').status_code, 400)
         self.assertFalse(self.calls)
 
+    def test_whole_page_gemini_job_uses_selected_model_and_existing_polling(self):
+        with patch.object(main, 'whole_page_book_count', return_value=2), \
+             patch.object(main, 'run_cloud_gemini_page_recognition', return_value={
+                 'text': 'བོད་', 'model': 'gemini:gemini-3.8-flash'}) as recognize:
+            response = self.client.post('/api/books/' + 'c' * 32 + '/gemini-recognition-jobs',
+                                        json={'page_num': 1, 'model': 'gemini-3.8-flash'})
+            self.assertEqual(response.status_code, 202)
+            job_id = response.json()['job_id']
+            main.line_review_jobs[job_id][0].result(2)
+        recognize.assert_called_once_with('c' * 32, 1, 'gemini-3.8-flash')
+        self.assertEqual(self.client.get('/api/line-review/jobs/' + job_id).json()['result']['text'], 'བོད་')
+
     def test_cloud_original_renders_in_worker_without_upload(self):
         render_started = threading.Event()
         render_release = threading.Event()

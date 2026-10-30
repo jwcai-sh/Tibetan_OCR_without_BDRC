@@ -1,6 +1,17 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
 const { diffSegments, parsePageTextFile } = require('../whole-page-proofread.js');
+
+test('Gemini panel offers model selection and current-page recognition', () => {
+  const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  const script = readFileSync(join(__dirname, '../whole-page-proofread.js'), 'utf8');
+  assert.match(html, /id="geminiRecognitionModel"/);
+  assert.match(html, /id="recognizeGemini"[^>]*>识别/);
+  assert.match(script, /gemini-recognition-jobs/);
+  assert.match(script, /model-results\/gemini4\/pages\/\$\{page\}/);
+});
 
 test('line breaks and spaces do not create Tibetan differences', () => {
   const pieces = diffSegments('ཀ་ ཁ་', 'ཀ་\nཁ་');

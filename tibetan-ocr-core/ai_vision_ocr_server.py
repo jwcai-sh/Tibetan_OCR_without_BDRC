@@ -62,7 +62,7 @@ OPENAI_REVIEW_API_KEY = os.environ.get("OPENAI_REVIEW_API_KEY", "") or os.enviro
 QWEN_REVIEW_API_KEY = os.environ.get("QWEN_REVIEW_API_KEY", "") or os.environ.get("DASHSCOPE_API_KEY", "")
 QWEN_REVIEW_BASE_URL = os.environ.get("QWEN_REVIEW_BASE_URL", "").rstrip("/")
 QWEN_REVIEW_MODELS = [item.strip() for item in os.environ.get("QWEN_REVIEW_MODELS", "qwen3.8-max,qwen3.7-plus").split(",") if item.strip()]
-GEMINI_REVIEW_MODELS = [item.strip() for item in os.environ.get("GEMINI_REVIEW_MODELS", "gemini-3.8-flash,gemini-3.1-flash-lite,gemini-2.5-flash").split(",") if item.strip()]
+GEMINI_REVIEW_MODELS = [item.strip() for item in os.environ.get("GEMINI_REVIEW_MODELS", "gemini-4-argon,gemini-3.8-flash,gemini-3.1-flash-lite,gemini-2.5-flash").split(",") if item.strip()]
 AGGREGATOR_ALLOW_FALLBACK = os.environ.get("AI_VISION_ALLOW_FALLBACK", "0").strip().lower() not in {
     "0",
     "false",

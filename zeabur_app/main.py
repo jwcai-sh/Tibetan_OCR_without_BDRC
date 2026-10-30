@@ -632,6 +632,40 @@ async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True, "page_count": page_count, "updated_at": result["updated_at"]}
 
 
+gemini_result_lock = threading.Lock()
+
+
+@app.put("/api/books/{book_id}/model-results/gemini4/pages/{page_num}")
+async def put_gemini_page_result(book_id: str, page_num: int, request: Request) -> dict[str, Any]:
+    count = whole_page_book_count(book_id)
+    if not 1 <= page_num <= count:
+        raise HTTPException(400, "页码超出范围")
+    payload = await request.json()
+    text = payload.get("text") if isinstance(payload, dict) else None
+    model = payload.get("model") if isinstance(payload, dict) else None
+    allowed = load_ai_ocr_module().GEMINI_REVIEW_MODELS
+    if not isinstance(model, str) or model.removeprefix("gemini:") not in allowed:
+        raise HTTPException(400, "所选 Gemini 模型不在允许列表中")
+    if not isinstance(text, str) or not text.strip() or len(text) > 50_000:
+        raise HTTPException(400, "当前页识别文本为空或超过 50000 字")
+    with gemini_result_lock:
+        try:
+            result = read_json(book_id, "model-results/gemini4.json")
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            result = {"model": "Gemini 4", "pages": {}}
+        pages = dict(result.get("pages") or {})
+        page_models = dict(result.get("page_models") or {})
+        pages[str(page_num)] = text.strip()
+        page_models[str(page_num)] = f"gemini:{model.removeprefix('gemini:')}"
+        result.update({"pages": pages, "page_models": page_models,
+                       "updated_at": datetime.now(timezone.utc).isoformat(),
+                       "updated_by": collaboration.current_actor(request) if collaboration.configured() else "recognition"})
+        write_json(book_id, "model-results/gemini4.json", result)
+    return {"ok": True, "page_num": page_num, "text": pages[str(page_num)], "model": page_models[str(page_num)]}
+
+
 def whole_page_book_count(book_id: str) -> int:
     read_json(book_id, "metadata.json")
     state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
@@ -863,6 +897,45 @@ line_review_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lin
 line_review_jobs: dict[str, tuple[Future, str, float]] = {}
 line_review_jobs_lock = threading.Lock()
 LINE_REVIEW_JOB_TTL = 3600
+
+
+def run_cloud_gemini_page_recognition(book_id: str, page_num: int, model: str) -> dict[str, str]:
+    original = get_book_page_preview(book_id, page_num, 260, "png")
+    module = load_ai_ocr_module()
+    if not module.USE_MODEL_AGGREGATOR:
+        raise RuntimeError("Gemini 整页识别需要模型聚合服务")
+    prompt = ("识别原图中间主体区域的全部藏文，按原稿阅读顺序逐行输出纯文本。"
+              "忽略左右边栏、边框及页码；保留红字、叠字、符号和标点，不补写无法辨认的字，"
+              "无法确认的字用〔?〕标记。不要解释、标题、代码块或 JSON。")
+    result = module.call_model_aggregator_gemini_page(original.body, "original-page.png", prompt, model)
+    text = str(result.get("text") or "").strip()
+    if not text or len(text) > 50_000:
+        raise RuntimeError("Gemini 未返回有效整页文字，原识别结果保留")
+    return {"text": text, "model": result["model"]}
+
+
+@app.post("/api/books/{book_id}/gemini-recognition-jobs")
+async def submit_gemini_page_recognition(book_id: str, request: Request) -> Response:
+    payload = await request.json()
+    page_num = payload.get("page_num") if isinstance(payload, dict) else None
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if type(page_num) is not int or not 1 <= page_num <= whole_page_book_count(book_id):
+        raise HTTPException(400, "页码超出范围")
+    module = load_ai_ocr_module()
+    if not isinstance(model, str) or model not in module.GEMINI_REVIEW_MODELS:
+        raise HTTPException(400, "所选 Gemini 模型不在允许列表中")
+    actor = getattr(request.state, "collaborator", "")
+    now = time.monotonic()
+    with line_review_jobs_lock:
+        for key, (future, _, created) in list(line_review_jobs.items()):
+            if future.done() and now - created > LINE_REVIEW_JOB_TTL:
+                del line_review_jobs[key]
+        if sum(not job[0].done() for job in line_review_jobs.values()) >= 4 or len(line_review_jobs) >= 100:
+            raise HTTPException(429, "后台识别任务较多，请稍后重试")
+        job_id = uuid.uuid4().hex
+        future = line_review_executor.submit(run_cloud_gemini_page_recognition, book_id, page_num, model)
+        line_review_jobs[job_id] = (future, actor, now)
+    return JSONResponse({"status": "queued", "job_id": job_id}, status_code=202)
 
 
 def run_cloud_line_review(book_id, page_num, dpi, bbox, ocr_text, model, region_id, rows=None):

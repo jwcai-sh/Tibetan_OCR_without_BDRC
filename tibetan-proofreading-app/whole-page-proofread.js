@@ -72,7 +72,7 @@
   const $ = id => root.document.getElementById(id);
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, pages: {}, dirty: false, saving: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, pages: {}, pageModels: {}, dirty: false, saving: false, recognizing: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
 
@@ -88,9 +88,15 @@
     return payload;
   }
 
+  function geminiLabel(page = state.page) {
+    const model = String(state.pageModels[String(page)] || 'gemini:gemini-4-argon').replace(/^gemini:/, '');
+    return [...$('geminiRecognitionModel').options].find(option => option.value === model)?.textContent || model;
+  }
+
   function renderCandidate(key) {
     const container = $(`${key}Text`);
     container.replaceChildren();
+    if (key === 'gemini4') $('geminiModelLabel').textContent = `${geminiLabel()} · 差异基准`;
     const text = state.pages[key]?.[String(state.page)] || '';
     if (!text) {
       container.textContent = key === 'yigdzin1' ? '本页无藏文识别结果。' : '本页尚无识别结果。';
@@ -105,7 +111,7 @@
         const mark = root.document.createElement(piece.type === 'diff' ? 'mark' : 'span');
         mark.className = piece.type === 'diff' ? 'different' : 'omission';
         if (piece.type === 'omission') {
-          mark.title = 'Gemini 4 有字，此结果漏识';
+          mark.title = 'Gemini 有字，此结果漏识';
           mark.setAttribute('aria-label', mark.title);
         } else mark.textContent = piece.text;
         container.appendChild(mark);
@@ -138,6 +144,9 @@
   async function loadPage(page) {
     state.page = page;
     const token = ++state.pageRequest;
+    $('geminiRecognitionFeedback').textContent = '';
+    const pageModel = String(state.pageModels[String(page)] || '').replace(/^gemini:/, '');
+    if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
     for (const key of MODEL_KEYS) renderCandidate(key);
     $('pageScan').src = endpoint(`/pages/${page}/preview?dpi=200&format=jpeg`);
@@ -149,6 +158,45 @@
     root.history.replaceState(null, '', url);
     try { await loadCorrected(page, token); }
     catch (error) { if (token === state.pageRequest) feedback(`正确版读取失败：${error.message}`, true); }
+  }
+
+  async function recognizeGeminiPage() {
+    if (!bookId || !state.count || state.recognizing) return;
+    const page = state.page;
+    const model = $('geminiRecognitionModel').value;
+    state.recognizing = true;
+    $('recognizeGemini').disabled = true;
+    $('geminiRecognitionFeedback').textContent = '';
+    feedback(`第 ${page} 页正在用 ${model} 识别…`);
+    try {
+      const job = await requestJson(endpoint('/gemini-recognition-jobs'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_num: page, model }),
+      });
+      if (!/^[a-f0-9]{32}$/.test(job.job_id || '')) throw new Error('识别任务编号无效');
+      let result = null;
+      for (let attempt = 0; attempt < 360; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const progress = await requestJson(`/api/line-review/jobs/${job.job_id}`);
+        if (progress.status === 'failed') throw new Error(progress.error || '模型识别失败');
+        if (progress.status === 'completed') { result = progress.result; break; }
+      }
+      if (!result) throw new Error('识别等待超时，请稍后重试');
+      if (result.model !== `gemini:${model}` || !result.text?.trim()) throw new Error('模型身份或识别文本无效，原结果保留');
+      const saved = await requestJson(endpoint(`/model-results/gemini4/pages/${page}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: result.text, model: result.model }),
+      });
+      state.pages.gemini4[String(page)] = saved.text;
+      state.pageModels[String(page)] = saved.model;
+      if (state.page === page) for (const key of MODEL_KEYS) renderCandidate(key);
+      feedback(`第 ${page} 页 ${geminiLabel(page)} 识别结果已保存到云端。人工正确版仍需单独保存。`);
+    } catch (error) {
+      const message = `第 ${page} 页识别失败：${error.message}；原结果保留。`;
+      $('geminiRecognitionFeedback').textContent = message;
+      feedback(message, true);
+    } finally {
+      state.recognizing = false;
+      $('recognizeGemini').disabled = [...$('geminiRecognitionModel').options].every(option => option.disabled);
+    }
   }
 
   async function saveCorrected() {
@@ -190,6 +238,7 @@
       });
       state.pages[key] = pages;
       if (key === 'gemini4') {
+        state.pageModels = {};
         for (const model of MODEL_KEYS) renderCandidate(model);
       } else renderCandidate(key);
       feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
@@ -218,6 +267,7 @@
   $('next').addEventListener('click', () => void goToPage(state.page + 1));
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
   $('saveCorrected').addEventListener('click', () => void saveCorrected());
+  $('recognizeGemini').addEventListener('click', () => void recognizeGeminiPage());
   $('copyGemini').addEventListener('click', () => {
     $('correctedText').value = state.pages.gemini4?.[String(state.page)] || '';
     $('correctedText').dispatchEvent(new Event('input'));
@@ -265,11 +315,20 @@
         button.addEventListener('click', () => void goToPage(page));
         $('pageIndex').appendChild(button);
       }
+      const catalog = await requestJson('/api/review-models').catch(() => null);
+      const allowed = catalog?.gemini?.models;
+      if (Array.isArray(allowed)) {
+        for (const option of $('geminiRecognitionModel').options) option.disabled = !allowed.includes(option.value);
+        const first = [...$('geminiRecognitionModel').options].find(option => !option.disabled);
+        $('recognizeGemini').disabled = !first;
+        if (first && $('geminiRecognitionModel').selectedOptions[0]?.disabled) $('geminiRecognitionModel').value = first.value;
+      }
       const models = await Promise.all(MODEL_KEYS.map(async key => {
         const result = await requestJson(endpoint(`/model-results/${key}`));
-        return [key, result.pages || {}];
+        return [key, result];
       }));
-      state.pages = Object.fromEntries(models);
+      state.pages = Object.fromEntries(models.map(([key, result]) => [key, result.pages || {}]));
+      state.pageModels = models.find(([key]) => key === 'gemini4')?.[1]?.page_models || {};
       await loadPage(Math.min(state.count, state.page));
     } catch (error) { feedback(`整页校对加载失败：${error.message}`, true); }
   }
