@@ -8,7 +8,8 @@
     :root { color: #1e2d3a; background: #f3f6f9; font-family: system-ui, sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    header { background: #18334b; color: white; padding: 18px 24px; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; background: #18334b; color: white; padding: 18px 24px; }
+    header a { color: white; font-weight: 600; white-space: nowrap; }
     h1 { margin: 0 0 5px; font-size: 22px; }
     header p { margin: 0; color: #dcecf8; }
     a { color: #28649a; }
@@ -45,22 +46,29 @@
     #saveCorrected { background: #28649a; border-color: #28649a; color: white; }
     .hint { margin: 0 0 9px; color: #526474; font-size: 13px; }
     .import-controls { margin-left: auto; font-size: 13px; }
-    .import-controls label { display: inline-block; margin: 4px 8px; }
-    .import-controls input { max-width: 185px; }
+    .import-controls summary { cursor: pointer; font-weight: 600; }
+    .import-fields { position: absolute; right: 24px; z-index: 3; display: grid; gap: 8px; min-width: 300px; padding: 12px; background: white; border: 1px solid #a7b9ca; border-radius: 7px; box-shadow: 0 4px 14px #18334b25; }
+    .import-fields label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .import-fields input { max-width: 190px; }
+    .import-fields small { color: #526474; }
+    @media (max-width: 700px) { header { flex-wrap: wrap; } .import-fields { right: 12px; left: 12px; min-width: 0; } }
     @media (max-width: 700px) { header, .toolbar, #pageIndex, main { padding-left: 12px; padding-right: 12px; } #feedback { margin-left: 12px; margin-right: 12px; } .image-viewport { max-height: 48vh; } .model-text, #correctedText { font-size: 20px; } }
   </style>
 </head>
 <body>
-  <header><h1>整页藏文校对</h1><p><strong id="bookName">正在读取书籍…</strong> · 原图在上，三个候选在下；以 Gemini 4 原始结果为差异基准。</p></header>
+  <header><div><h1>整页藏文校对</h1><p><strong id="bookName">正在读取书籍…</strong> · 原图在上，三个候选在下；以 Gemini 4 原始结果为差异基准。</p></div><a id="backToWorkbench" href="/tibetan-proofreading-app/">返回逐行工作台 →</a></header>
   <div class="toolbar">
     <button id="previous" type="button">上一页</button>
     <input id="pageInput" type="number" min="1" aria-label="当前页码" />
     <strong id="pageNumber">— / —</strong>
     <button id="next" type="button">下一页</button>
-    <a id="backToWorkbench" href="/tibetan-proofreading-app/">返回逐行工作台</a>
-    <details class="import-controls"><summary>导入整页候选</summary>
+    <details class="import-controls"><summary>导入文件</summary><div class="import-fields">
+      <label>新建 PDF 项目 <input id="sourceImport" type="file" accept=".pdf,application/pdf" /></label>
+      <small>以下 TXT 按“第 1 页”至末页分隔，导入当前项目：</small>
+      <label>Gemini 4 TXT <input id="gemini4Import" type="file" accept=".txt,text/plain" /></label>
       <label>教师校正稿 TXT <input id="teacherImport" type="file" accept=".txt,text/plain" /></label>
       <label>Yigdzin1 TXT <input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label>
+      </div>
     </details>
   </div>
   <nav id="pageIndex" aria-label="选择 PDF 页码"></nav>
@@ -72,6 +80,6 @@
     <details class="model-panel" open><summary>Yigdzin1</summary><div id="yigdzin1Text" class="model-text"></div></details>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 4 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261030-v2" defer></script>
+  <script src="./whole-page-proofread.js?v=20261030-v3" defer></script>
 </body>
 </html>

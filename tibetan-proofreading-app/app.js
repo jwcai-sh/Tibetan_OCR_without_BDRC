@@ -843,8 +843,13 @@ async function restoreRouteFromLocation() {
   await initializeProofreadFallback();
   const workflow = getWorkflowFromLocation();
   if (workflow === "ocr" || workflow === "translation") {
+    const params = new URLSearchParams(window.location.search);
+    const bookId = params.get("book_id");
+    if (workflow === "ocr" && isCloudDeployment() && bookId && params.get("view") !== "line") {
+      window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(bookId)}&page=1`);
+      return;
+    }
     showWorkbenchView(workflow, { updateRoute: false });
-    const bookId = new URLSearchParams(window.location.search).get("book_id");
     if (isCloudDeployment() && bookId) {
       await resumeRemoteProject({ remoteBookId: bookId }, workflow);
       return;
@@ -863,6 +868,10 @@ async function restoreActiveProjectForRoute(workflow) {
   const project = parseCachedProject(cacheKey);
   if (!project) return;
   if (isCloudDeployment() && project.remoteBookId) {
+    if (workflow === "ocr" && new URLSearchParams(window.location.search).get("view") !== "line") {
+      window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(project.remoteBookId)}&page=1`);
+      return;
+    }
     await resumeRemoteProject(project, workflow);
     return;
   }
@@ -2300,6 +2309,10 @@ function makeHomeProjectFilterSummary(filter, filteredCount, totalCount) {
 function openHomeProject(project, workflow) {
   if (project.kind === "folder") {
     openFolderProject(project, workflow);
+    return;
+  }
+  if (workflow === "ocr" && isCloudDeployment() && project.remoteBookId) {
+    window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(project.remoteBookId)}&page=1`);
     return;
   }
   if (project.isActive) {

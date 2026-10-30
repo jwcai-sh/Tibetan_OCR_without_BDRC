@@ -182,16 +182,36 @@
 
   async function importModel(key, file) {
     try {
+      if (!bookId || !state.count) throw new Error('请先导入 PDF 项目');
       const pages = parsePageTextFile(await file.text(), state.count);
       feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${state.count} 页…`);
       await requestJson(endpoint(`/model-results/${key}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
       });
       state.pages[key] = pages;
-      renderCandidate(key);
+      if (key === 'gemini4') {
+        for (const model of MODEL_KEYS) renderCandidate(model);
+      } else renderCandidate(key);
       feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
       root.document.querySelector('.import-controls').open = false;
     } catch (error) { feedback(`${MODEL_LABELS[key]} 导入失败：${error.message}`, true); }
+  }
+
+  async function importSource(file) {
+    const input = $('sourceImport');
+    try {
+      if (!/\.pdf$/i.test(file.name)) throw new Error('请选择 PDF 文件');
+      input.disabled = true;
+      feedback(`正在上传 ${file.name}…`);
+      const form = new FormData();
+      form.append('file', file, file.name);
+      const result = await requestJson('/api/books', { method: 'POST', body: form });
+      if (!result.book_id) throw new Error('云端未返回书籍 ID');
+      root.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(result.book_id)}&page=1`);
+    } catch (error) {
+      input.disabled = false;
+      feedback(`PDF 导入失败：${error.message}`, true);
+    }
   }
 
   $('previous').addEventListener('click', () => void goToPage(state.page - 1));
@@ -212,7 +232,12 @@
       ? `第 ${state.page} 页有未同步修改；点击“保存正确版”或翻页时自动保存。`
       : '本机草稿保存失败；请立即点击“保存正确版”。', !draftStored);
   });
-  for (const key of ['teacher', 'yigdzin1']) {
+  $('sourceImport').addEventListener('change', async event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) await importSource(file);
+  });
+  for (const key of MODEL_KEYS) {
     $(`${key}Import`).addEventListener('change', async event => {
       const file = event.target.files?.[0];
       event.target.value = '';
@@ -220,12 +245,14 @@
     });
   }
   $('pageScan').addEventListener('error', () => feedback('原图加载失败；请检查协作登录状态后重试。', true));
-  $('backToWorkbench').href = `/tibetan-proofreading-app/?workflow=ocr&book_id=${encodeURIComponent(bookId)}`;
+  $('backToWorkbench').href = bookId
+    ? `/tibetan-proofreading-app/?workflow=ocr&book_id=${encodeURIComponent(bookId)}&view=line`
+    : '/tibetan-proofreading-app/';
   $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
   $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
 
   async function start() {
-    if (!bookId) { feedback('缺少书籍 ID，请从校对工作台打开此页。', true); return; }
+    if (!bookId) { $('bookName').textContent = '尚未选择 PDF'; feedback('请点击右侧“导入文件”，上传 PDF 创建项目。'); return; }
     try {
       const info = await requestJson(endpoint('/document-info'));
       state.count = Number(info.page_count) || 0;
