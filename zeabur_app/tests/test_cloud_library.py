@@ -96,6 +96,17 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(response.headers["content-range"], "bytes 0-4/9")
         self.assertEqual(response.headers["accept-ranges"], "bytes")
 
+    def test_gemini4_import_is_page_complete_and_keeps_proofreading_state(self):
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        main.write_json(book_id, "state.json", {"page_count": 2, "ocr_results": {"1": {"text": "人工校对"}}})
+        endpoint = f"/api/books/{book_id}/model-results/gemini4"
+        self.assertEqual(self.client.put(endpoint, json={"pages": {"1": "བོད་"}}).status_code, 400)
+        response = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.get(endpoint).json()["pages"]["2"], "ཡིག་")
+        self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "人工校对")
+
     def test_mobile_pdf_pages_and_text_use_existing_collaboration_auth(self):
         document = fitz.open()
         document.new_page().insert_text((72, 72), "First page")

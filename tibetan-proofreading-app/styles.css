@@ -1523,6 +1523,27 @@ body.is-resizing-panes * {
   background: #edf0ee;
 }
 
+.gemini4-panel {
+  padding: 8px 12px;
+  border-bottom: 1px solid #bcd4e9;
+  background: #f2f8fe;
+}
+
+.gemini4-panel[hidden], .gemini4-panel details[hidden] { display: none; }
+.gemini4-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #24558b; }
+.gemini4-panel .review-feedback { margin: 3px 0; }
+.gemini4-panel summary { cursor: pointer; color: #24558b; font-weight: 600; }
+.gemini4-panel pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Noto Serif Tibetan", "Microsoft Himalaya", serif;
+  font-size: var(--ocr-font-size, 22px);
+  line-height: 1.8;
+}
+
 .ocr-source-compare {
   margin: 10px;
   overflow: hidden;

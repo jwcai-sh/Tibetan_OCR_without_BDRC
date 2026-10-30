@@ -44,10 +44,10 @@
       };
       window.setTimeout(window.__tibetanWorkbenchBootFailure, 90000);
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20261025-row-visible-v20" onerror="window.__tibetanWorkbenchBootFailure()" />
+    <link rel="stylesheet" href="./styles.css?v=20261030-gemini4-v1" onerror="window.__tibetanWorkbenchBootFailure()" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261028-gemini-default-v31" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
+    <script src="./app.js?v=20261030-gemini4-v1" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -409,6 +409,16 @@
             <button id="collabRetrySync" class="ghost-button compact" type="button" hidden>重试云端同步</button>
             <button id="collabLogout" class="ghost-button compact" type="button">退出协作</button>
             <span id="collabFeedback" role="status"></span>
+          </section>
+
+          <section id="gemini4Panel" class="gemini4-panel" hidden aria-label="Gemini 4 逐页识别结果">
+            <div class="gemini4-heading">
+              <strong>Gemini 4 · 第 <span id="gemini4PageNumber">1</span> 页</strong>
+              <button id="gemini4ImportButton" class="ghost-button compact" type="button">导入 24 页 TXT</button>
+              <input id="gemini4ImportInput" type="file" accept=".txt,text/plain" hidden />
+            </div>
+            <div id="gemini4Feedback" class="review-feedback" role="status" aria-live="polite"></div>
+            <details id="gemini4Details" open><summary>查看 Gemini 4 原文</summary><pre id="gemini4Text"></pre></details>
           </section>
 
           <div id="ocrLineCompare" class="ocr-line-compare" aria-label="Gemini OCR 逐行校对"></div>

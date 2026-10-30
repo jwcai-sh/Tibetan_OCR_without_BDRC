@@ -597,6 +597,41 @@ async def put_book_state(book_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True, "book_id": book_id, "updated_at": payload["updated_at"]}
 
 
+@app.get("/api/books/{book_id}/model-results/gemini4")
+def get_gemini4_results(book_id: str) -> dict[str, Any]:
+    read_json(book_id, "metadata.json")
+    try:
+        return read_json(book_id, "model-results/gemini4.json")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return {"model": "Gemini 4", "pages": {}}
+        raise
+
+
+@app.put("/api/books/{book_id}/model-results/gemini4")
+async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
+    metadata = read_json(book_id, "metadata.json")
+    payload = await request.json()
+    pages = payload.get("pages") if isinstance(payload, dict) else None
+    book_state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
+    page_count = int(book_state.get("page_count") or book_state.get("pageCount") or 0)
+    if not isinstance(pages, dict) or not page_count or len(pages) != page_count or any(
+        str(page) not in pages or not isinstance(pages[str(page)], str) or not pages[str(page)].strip()
+        for page in range(1, page_count + 1)
+    ) or any(not str(page).isdigit() or not 1 <= int(page) <= page_count for page in pages):
+        raise HTTPException(400, "Gemini 4 结果必须包含与书籍对应的每一页非空文本")
+    if sum(len(text) for text in pages.values()) > 2_000_000:
+        raise HTTPException(413, "Gemini 4 结果过大")
+    result = {
+        "model": "Gemini 4",
+        "pages": {str(page): pages[str(page)].strip() for page in range(1, page_count + 1)},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import",
+    }
+    write_json(book_id, "model-results/gemini4.json", result)
+    return {"ok": True, "page_count": page_count, "updated_at": result["updated_at"]}
+
+
 @app.get("/api/books/{book_id}/assignments")
 def get_assignments(book_id: str) -> dict[str, Any]:
     if not collaboration.configured():

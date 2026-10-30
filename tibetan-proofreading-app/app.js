@@ -190,6 +190,7 @@ const state = {
   pageNum: 1,
   pageCount: 0,
   ocrResults: new Map(),
+  gemini4Pages: {},
   ocrProfile: DEFAULT_OCR_PROFILE,
   translationResults: new Map(),
   ocrQualityReviews: [],
@@ -365,6 +366,7 @@ function cacheElements() {
     "lineViewButton",
     "textViewButton",
     "ocrLineCompare",
+    "gemini4Panel", "gemini4PageNumber", "gemini4ImportButton", "gemini4ImportInput", "gemini4Feedback", "gemini4Details", "gemini4Text",
     "ocrText",
     "charCount",
     "recognizedCount",
@@ -595,6 +597,12 @@ function wireEvents() {
   });
   els.copyButton.addEventListener("click", copyCurrentText);
   els.downloadTextButton.addEventListener("click", downloadAllOcrText);
+  els.gemini4ImportButton.addEventListener("click", () => els.gemini4ImportInput.click());
+  els.gemini4ImportInput.addEventListener("change", async () => {
+    const file = els.gemini4ImportInput.files?.[0];
+    els.gemini4ImportInput.value = "";
+    if (file) await importGemini4File(file);
+  });
   els.copyAiButton.addEventListener("click", copyCurrentAiText);
   els.downloadAiTextButton.addEventListener("click", downloadAllAiOcrText);
   els.decreaseOcrFontButton.addEventListener("click", () => {
@@ -1434,6 +1442,7 @@ async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
     state.remoteDeferredPages = new Set(pendingPages);
     state.remoteRestoreInFlight = false;
     state.remoteRestoreComplete = true;
+    void loadGemini4Pages(project.remoteBookId);
     state.remoteStateLoadError = "";
     if (els.collabRetryLoad) els.collabRetryLoad.hidden = true;
     if (isCloudDeployment() && project.remoteBookId) {
@@ -3202,6 +3211,7 @@ async function loadWord(file) {
 }
 
 function resetDocumentState() {
+  state.gemini4Pages = {};
   state.batchOcr = null;
   state.thumbnailToken += 1;
   clearSourceBlockOverlay();
@@ -3521,6 +3531,70 @@ function saveCachedResults(options = {}) {
   } catch (error) {
     console.warn("Failed to save cached OCR state", error);
     return false;
+  }
+}
+
+function parseGemini4Pages(text, pageCount) {
+  const pages = {};
+  const headings = [...String(text).matchAll(/^第\s*(\d+)\s*页\s*$/gm)];
+  for (let index = 0; index < headings.length; index += 1) {
+    const page = Number(headings[index][1]);
+    if (!Number.isInteger(page) || page < 1 || page > pageCount || pages[page]) throw new Error(`页码重复或超出范围：${page}`);
+    const body = text.slice(headings[index].index + headings[index][0].length, headings[index + 1]?.index ?? text.length).trim();
+    if (!body) throw new Error(`第 ${page} 页没有识别文本`);
+    pages[page] = body;
+  }
+  if (Object.keys(pages).length !== pageCount) throw new Error(`应有 ${pageCount} 页，实际找到 ${Object.keys(pages).length} 页`);
+  return pages;
+}
+
+function renderGemini4Page() {
+  if (!els.gemini4Panel) return;
+  els.gemini4Panel.hidden = !state.remoteBookId || state.activeWorkflow === "translation";
+  if (els.gemini4Panel.hidden) return;
+  els.gemini4PageNumber.textContent = String(state.pageNum);
+  const pageText = state.gemini4Pages[String(state.pageNum)] || "";
+  els.gemini4Text.textContent = pageText || "当前页尚未导入 Gemini 4 结果。";
+  els.gemini4Details.hidden = !pageText;
+}
+
+async function loadGemini4Pages(bookId) {
+  try {
+    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini4`, {credentials: "same-origin"});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    if (state.remoteBookId !== bookId) return;
+    state.gemini4Pages = payload.pages || {};
+    els.gemini4Feedback.textContent = Object.keys(state.gemini4Pages).length ? `云端已保存 ${Object.keys(state.gemini4Pages).length} 页` : "尚未导入";
+    renderGemini4Page();
+  } catch (error) {
+    if (state.remoteBookId === bookId) els.gemini4Feedback.textContent = `Gemini 4 云端结果读取失败：${error.message}`;
+  }
+}
+
+async function importGemini4File(file) {
+  const bookId = state.remoteBookId;
+  if (!bookId || !state.pageCount) {
+    els.gemini4Feedback.textContent = "请先打开云端书籍。";
+    return;
+  }
+  els.gemini4ImportButton.disabled = true;
+  try {
+    const pages = parseGemini4Pages(await file.text(), state.pageCount);
+    els.gemini4Feedback.textContent = `正在上传 ${state.pageCount} 页到云端…`;
+    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini4`, {
+      method: "PUT", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify({pages}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    if (state.remoteBookId !== bookId) return;
+    state.gemini4Pages = pages;
+    els.gemini4Feedback.textContent = `Gemini 4 的 ${payload.page_count} 页已保存到云端，可在其他终端登录查看。`;
+    renderGemini4Page();
+  } catch (error) {
+    els.gemini4Feedback.textContent = `导入失败：${error.message}`;
+  } finally {
+    els.gemini4ImportButton.disabled = false;
   }
 }
 
@@ -10525,6 +10599,7 @@ async function repairSourceRowBindings(result) {
 }
 
 function updateOcrPanelForPage() {
+  renderGemini4Page();
   const result = state.ocrResults.get(state.pageNum);
   void repairSourceRowBindings(result);
   const sourceLabel = getResultSourceLabel(result);
