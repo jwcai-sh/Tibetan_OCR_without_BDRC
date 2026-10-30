@@ -1,4 +1,5 @@
 import json
+import struct
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -63,6 +64,27 @@ class CloudLibraryTest(unittest.TestCase):
         self.password_patch.start()
         self.addCleanup(self.bucket_patch.stop)
         self.addCleanup(self.password_patch.stop)
+
+    def test_whole_page_uses_pdf_count_and_rotates_tall_preview_on_request(self):
+        document = fitz.open()
+        document.new_page(width=100, height=500)
+        pdf = document.tobytes()
+        document.close()
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        self.assertEqual(main.read_json(book_id, "state.json")["page_count"], 0)
+        main._cached_pdf_page_preview.cache_clear()
+        with patch.object(main, "cached_pdf_source", return_value=pdf):
+            self.assertEqual(main.whole_page_book_count(book_id), 1)
+            self.assertEqual(self.client.get(f"/api/books/{book_id}/whole-page-proofread/1").status_code, 200)
+            self.assertEqual(self.client.put(f"/api/books/{book_id}/whole-page-proofread/1", json={"text": "བོད་"}).status_code, 200)
+            portrait = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png")
+            landscape = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png&landscape=true")
+        self.assertEqual((portrait.status_code, landscape.status_code), (200, 200))
+        pw, ph = struct.unpack(">II", portrait.content[16:24])
+        lw, lh = struct.unpack(">II", landscape.content[16:24])
+        self.assertLess(pw, ph)
+        self.assertGreater(lw, lh)
 
     def test_listing_requires_password_and_uses_only_library_prefix(self):
         objects = [SimpleNamespace(key="待识别文档/经书/第一册.pdf", size=9,

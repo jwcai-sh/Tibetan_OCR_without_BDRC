@@ -161,7 +161,7 @@
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
     for (const key of MODEL_KEYS) renderCandidate(key);
-    $('pageScan').src = endpoint(`/pages/${page}/preview?dpi=200&format=jpeg`);
+    $('pageScan').src = endpoint(`/pages/${page}/preview?dpi=200&format=jpeg&landscape=true`);
     $('pageScan').alt = `原始 PDF 第 ${page} 页`;
     $('correctedText').value = '';
     $('saveCorrected').disabled = true;

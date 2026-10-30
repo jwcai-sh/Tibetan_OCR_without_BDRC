@@ -111,7 +111,7 @@ _pdf_page_render_lock = threading.Lock()
 
 
 @lru_cache(maxsize=8)
-def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str) -> bytes:
+def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False) -> bytes:
     import fitz
 
     with fitz.open(stream=cached_pdf_source(source_key, source_size), filetype="pdf") as document:
@@ -119,15 +119,17 @@ def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, d
             raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
         page = document.load_page(page_num - 1)
         bounded_dpi = min(dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
-        pixmap = page.get_pixmap(dpi=bounded_dpi, alpha=False)
+        rotate = 90 if landscape and page.rect.height > page.rect.width * 1.5 else 0
+        matrix = fitz.Matrix(bounded_dpi / 72, bounded_dpi / 72).prerotate(rotate)
+        pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
 
 
-def cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str) -> bytes:
+def cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False) -> bytes:
     # A new collaborator requests several crops from the same page at once.
     # Coalesce those full-page renders and bound concurrent PDF work per worker.
     with _pdf_page_render_lock:
-        return _cached_pdf_page_preview(source_key, source_size, page_num, dpi, preview_format)
+        return _cached_pdf_page_preview(source_key, source_size, page_num, dpi, preview_format, landscape)
 
 
 def require_library_access(authorization: str) -> None:
@@ -514,7 +516,7 @@ def get_book_source(book_id: str, request: Request) -> Response:
 
 
 @app.get("/api/books/{book_id}/pages/{page_num}/preview")
-def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: str = "png") -> Response:
+def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: str = "png", landscape: bool = False) -> Response:
     metadata = read_json(book_id, "metadata.json")
     source_key = str(metadata.get("source_key") or "")
     if not source_key or not str(metadata.get("name") or "").lower().endswith(".pdf"):
@@ -524,7 +526,7 @@ def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: s
     safe_dpi = min(360, max(72, dpi))
     preview_format = "jpeg" if format.lower() in ("jpeg", "jpg") else "png"
     try:
-        image_bytes = cached_pdf_page_preview(source_key, int(metadata.get("size") or 0), page_num, safe_dpi, preview_format)
+        image_bytes = cached_pdf_page_preview(source_key, int(metadata.get("size") or 0), page_num, safe_dpi, preview_format, landscape)
     except HTTPException:
         raise
     except oss2.exceptions.NoSuchKey as exc:
@@ -667,11 +669,16 @@ async def put_gemini_page_result(book_id: str, page_num: int, request: Request) 
 
 
 def whole_page_book_count(book_id: str) -> int:
-    read_json(book_id, "metadata.json")
+    metadata = remote_pdf_metadata(book_id)
     state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
     count = int(state.get("page_count") or state.get("pageCount") or 0)
     if count < 1:
-        raise HTTPException(409, "请先加载书籍页数")
+        import fitz
+
+        with fitz.open(stream=cached_pdf_source(str(metadata["source_key"]), int(metadata.get("size") or 0)), filetype="pdf") as document:
+            count = document.page_count
+    if count < 1:
+        raise HTTPException(409, "书籍没有可预览的 PDF 页面")
     return count
 
 
