@@ -42,6 +42,8 @@
     .model-panel .model-text { margin-top: 9px; }
     .model-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 0 12px; vertical-align: middle; }
     .model-actions select { padding: 7px; border: 1px solid #a7b9ca; border-radius: 7px; background: white; font: inherit; }
+    .model-import { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin: 9px 0 0; font: 13px system-ui, sans-serif; color: #526474; }
+    .model-import input { max-width: 250px; }
     #geminiRecognitionFeedback { margin: 8px 0 0; color: #9a2926; font-size: 13px; }
     #geminiRecognitionFeedback:empty { display: none; }
     .image-viewport { max-height: 58vh; overflow: auto; text-align: center; }
@@ -76,10 +78,8 @@
     <button id="next" type="button">下一页</button>
     <details class="import-controls"><summary>导入文件</summary><div class="import-fields">
       <label>新建 PDF 项目 <input id="sourceImport" type="file" accept=".pdf,application/pdf" /></label>
-      <small>以下 TXT 按“第 1 页”至末页分隔，导入当前项目：</small>
+      <small>Gemini TXT 按“第 1 页”至末页分隔，导入当前项目：</small>
       <label>Gemini 4 TXT <input id="gemini4Import" type="file" accept=".txt,text/plain" /></label>
-      <label>教师校正稿 TXT <input id="teacherImport" type="file" accept=".txt,text/plain" /></label>
-      <label>Yigdzin1 TXT <input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label>
       </div>
     </details>
   </div>
@@ -87,10 +87,10 @@
   <main>
     <section><div class="heading"><h2>原图</h2><button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button></div><div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div></section>
     <details id="gemini4Panel" class="model-panel" open><summary><span id="geminiModelLabel">Gemini 4 · 差异基准</span></summary><div class="model-actions"><select id="geminiRecognitionModel" aria-label="Gemini 识别模型"><option value="gemini-4-argon">Gemini 4 Argon</option><option value="gemini-3.8-flash">Gemini 3.8 Flash</option><option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select><button id="recognizeGemini" type="button">识别</button><button id="copyGemini" type="button">填入正确版</button></div><p id="geminiRecognitionFeedback" role="alert"></p><div id="gemini4Text" class="model-text"></div></details>
-    <details class="model-panel" open><summary>教师校正稿</summary><div id="teacherText" class="model-text"></div></details>
-    <details class="model-panel" open><summary>Yigdzin1</summary><div id="yigdzin1Text" class="model-text"></div></details>
+    <details class="model-panel" open><summary>教师校正稿</summary><label class="model-import">导入教师校正稿 TXT（按页分隔）<input id="teacherImport" type="file" accept=".txt,text/plain" /></label><div id="teacherText" class="model-text"></div></details>
+    <details class="model-panel" open><summary>Yigdzin1</summary><label class="model-import">导入 Yigdzin1 TXT（按页分隔）<input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label><div id="yigdzin1Text" class="model-text"></div></details>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261030-v5" defer></script>
+  <script src="./whole-page-proofread.js?v=20261030-v6" defer></script>
 </body>
 </html>

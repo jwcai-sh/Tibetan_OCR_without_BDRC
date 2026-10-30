@@ -2109,6 +2109,10 @@ async function openCloudLibraryFile(file) {
     if (requestId !== state.documentRequestId) return;
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
     setCloudLibraryStatus("");
+    if (isCloudDeployment() && isPdfFile({ name: book.name || file.name || file.path, type: book.content_type })) {
+      window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(book.book_id)}&page=1`);
+      return;
+    }
     await resumeRemoteProject({
       sourceName: book.name, sourceSize: book.size, sourceMime: book.content_type,
       remoteBookId: book.book_id,
@@ -2315,6 +2319,10 @@ function openHomeProject(project, workflow) {
     window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(project.remoteBookId)}&page=1`);
     return;
   }
+  if (workflow === "ocr" && isCloudDeployment() && /\.pdf$/i.test(project.sourceName || "")) {
+    void openCachedPdfInWholePage(project);
+    return;
+  }
   if (project.isActive) {
     showWorkbenchView(workflow);
     if (workflow === "ocr") {
@@ -2323,6 +2331,24 @@ function openHomeProject(project, workflow) {
     return;
   }
   requestCachedProjectSource(project, workflow);
+}
+
+async function openCachedPdfInWholePage(project) {
+  try {
+    setStatus(`正在将“${project.sourceName}”载入整页校对…`, "warn");
+    const file = await getStoredSourceFile(project.cacheKey);
+    if (!file) throw new Error("本机 PDF 源文件缓存已丢失，请从 OSS 目录重新打开原文件");
+    const form = new FormData();
+    form.append("file", file, file.name || project.sourceName);
+    const response = await fetchWithCloudTimeout(`${window.location.origin}/api/books`, {
+      method: "POST", credentials: "same-origin", body: form,
+    }, 120000);
+    const book = await response.json().catch(() => ({}));
+    if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
+    window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(book.book_id)}&page=1`);
+  } catch (error) {
+    setStatus(`打开整页校对失败：${error.message || error}`, "error");
+  }
 }
 
 async function openFolderProject(project, workflow = "ocr") {

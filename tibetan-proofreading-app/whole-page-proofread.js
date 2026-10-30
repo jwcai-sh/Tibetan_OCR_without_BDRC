@@ -253,7 +253,7 @@
         for (const model of MODEL_KEYS) renderCandidate(model);
       } else renderCandidate(key);
       feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
-      root.document.querySelector('.import-controls').open = false;
+      if (key === 'gemini4') root.document.querySelector('.import-controls').open = false;
     } catch (error) { feedback(`${MODEL_LABELS[key]} 导入失败：${error.message}`, true); }
   }
 

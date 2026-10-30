@@ -24,6 +24,41 @@ test('cloud OCR project resumes in whole-page view', () => {
   assert.equal(destination, './whole-page-proofread.html?book_id=book-123&page=1');
 });
 
+test('OSS PDF opens directly in whole-page view after library registration', async () => {
+  let destination = '';
+  let resumed = false;
+  const context = {
+    state: { documentRequestId: 0 },
+    cloudLibrary: { authMode: 'collaboration', apiBaseUrl: '' },
+    setCloudLibraryStatus: () => {},
+    isCloudDeployment: () => true,
+    isLocalWorkbench: () => false,
+    cloudLibraryApiOrigin: () => 'https://example.test',
+    fetchWithCloudTimeout: async () => ({ ok: true, json: async () => ({ book_id: 'oss-book', name: 'source.pdf', content_type: 'application/pdf' }) }),
+    isPdfFile: ({ name }) => name.endsWith('.pdf'),
+    resumeRemoteProject: async () => { resumed = true; },
+    window: { location: { assign(url) { destination = url; } } },
+  };
+  vm.runInNewContext(functionSource('async function openCloudLibraryFile(', 'function renderHomeDashboard('), context);
+  await context.openCloudLibraryFile({ path: 'source.pdf' });
+  assert.equal(destination, './whole-page-proofread.html?book_id=oss-book&page=1');
+  assert.equal(resumed, false);
+});
+
+test('cached PDF without a cloud book uploads for whole-page proofreading', async () => {
+  let destination = '';
+  const context = {
+    window: { location: { origin: 'https://example.test', assign(url) { destination = url; } } },
+    setStatus: () => {},
+    getStoredSourceFile: async () => ({ name: 'source.pdf' }),
+    FormData: class { append() {} },
+    fetchWithCloudTimeout: async () => ({ ok: true, json: async () => ({ book_id: 'new-book' }) }),
+  };
+  vm.runInNewContext(functionSource('async function openCachedPdfInWholePage(', 'async function openFolderProject('), context);
+  await context.openCachedPdfInWholePage({ cacheKey: 'cached', sourceName: 'source.pdf' });
+  assert.equal(destination, './whole-page-proofread.html?book_id=new-book&page=1');
+});
+
 test('old cloud OCR URL opens whole page, explicit line view stays in workbench', async () => {
   for (const [search, shouldRedirect] of [
     ['?workflow=ocr&book_id=book-123', true],
