@@ -366,7 +366,7 @@ function cacheElements() {
     "lineViewButton",
     "textViewButton",
     "ocrLineCompare",
-    "gemini4Panel", "gemini4PageNumber", "gemini4ImportButton", "gemini4ImportInput", "gemini4Feedback", "gemini4Details", "gemini4Text",
+    "gemini4Panel", "gemini4PageNumber", "wholePageProofreadLink", "gemini4ImportButton", "gemini4ImportInput", "gemini4Feedback", "gemini4Details", "gemini4Text",
     "ocrText",
     "charCount",
     "recognizedCount",
@@ -3553,6 +3553,7 @@ function renderGemini4Page() {
   els.gemini4Panel.hidden = !state.remoteBookId || state.activeWorkflow === "translation";
   if (els.gemini4Panel.hidden) return;
   els.gemini4PageNumber.textContent = String(state.pageNum);
+  els.wholePageProofreadLink.href = `./whole-page-proofread.html?book_id=${encodeURIComponent(state.remoteBookId)}&page=${state.pageNum}`;
   const pageText = state.gemini4Pages[String(state.pageNum)] || "";
   els.gemini4Text.textContent = pageText || "当前页尚未导入 Gemini 4 结果。";
   els.gemini4Details.hidden = !pageText;

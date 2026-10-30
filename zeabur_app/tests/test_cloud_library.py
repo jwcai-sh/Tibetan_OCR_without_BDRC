@@ -107,6 +107,21 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(self.client.get(endpoint).json()["pages"]["2"], "ཡིག་")
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "人工校对")
 
+    def test_whole_page_candidates_and_corrected_page_are_isolated(self):
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        main.write_json(book_id, "state.json", {"page_count": 2, "ocr_results": {"1": {"text": "原工作台校对"}}})
+        base = f"/api/books/{book_id}"
+        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"1": "ཀ་"}}).status_code, 400)
+        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"1": "ཀ་", "2": "ཁ་"}}).status_code, 200)
+        self.assertEqual(self.client.put(f"{base}/model-results/yigdzin1", json={"pages": {"1": "ཀ་", "2": ""}}).status_code, 200)
+        self.assertEqual(self.client.get(f"{base}/model-results/teacher").json()["pages"]["2"], "ཁ་")
+        self.assertEqual(self.client.get(f"{base}/model-results/yigdzin1").json()["pages"]["2"], "")
+        self.assertEqual(self.client.put(f"{base}/whole-page-proofread/1", json={"text": "ཀ་ག"}).status_code, 200)
+        self.assertEqual(self.client.get(f"{base}/whole-page-proofread/1").json()["text"], "ཀ་ག")
+        self.assertEqual(self.client.get(f"{base}/whole-page-proofread/2").json()["text"], "")
+        self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "原工作台校对")
+
     def test_mobile_pdf_pages_and_text_use_existing_collaboration_auth(self):
         document = fitz.open()
         document.new_page().insert_text((72, 72), "First page")

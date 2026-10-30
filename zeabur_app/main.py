@@ -632,6 +632,83 @@ async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True, "page_count": page_count, "updated_at": result["updated_at"]}
 
 
+def whole_page_book_count(book_id: str) -> int:
+    read_json(book_id, "metadata.json")
+    state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
+    count = int(state.get("page_count") or state.get("pageCount") or 0)
+    if count < 1:
+        raise HTTPException(409, "请先加载书籍页数")
+    return count
+
+
+@app.get("/api/books/{book_id}/model-results/{model_key}")
+def get_whole_page_model_results(book_id: str, model_key: str) -> dict[str, Any]:
+    if model_key not in {"teacher", "yigdzin1"}:
+        raise HTTPException(404, "未知整页候选")
+    read_json(book_id, "metadata.json")
+    try:
+        return read_json(book_id, f"model-results/{model_key}.json")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return {"model": model_key, "pages": {}}
+        raise
+
+
+@app.put("/api/books/{book_id}/model-results/{model_key}")
+async def put_whole_page_model_results(book_id: str, model_key: str, request: Request) -> dict[str, Any]:
+    if model_key not in {"teacher", "yigdzin1"}:
+        raise HTTPException(404, "未知整页候选")
+    count = whole_page_book_count(book_id)
+    payload = await request.json()
+    pages = payload.get("pages") if isinstance(payload, dict) else None
+    if not isinstance(pages, dict) or len(pages) != count or any(
+        str(page) not in pages or not isinstance(pages[str(page)], str)
+        for page in range(1, count + 1)
+    ) or any(not str(page).isdigit() or not 1 <= int(page) <= count for page in pages):
+        raise HTTPException(400, "整页候选必须包含书籍的每一页")
+    if sum(len(text) for text in pages.values()) > 2_000_000:
+        raise HTTPException(413, "整页候选过大")
+    result = {
+        "model": model_key,
+        "pages": {str(page): pages[str(page)].strip() for page in range(1, count + 1)},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import",
+    }
+    write_json(book_id, f"model-results/{model_key}.json", result)
+    return {"ok": True, "page_count": count, "updated_at": result["updated_at"]}
+
+
+@app.get("/api/books/{book_id}/whole-page-proofread/{page_num}")
+def get_whole_page_proofread(book_id: str, page_num: int) -> dict[str, Any]:
+    if page_num < 1 or page_num > whole_page_book_count(book_id):
+        raise HTTPException(400, "页码超出范围")
+    try:
+        return read_json(book_id, f"whole-page-proofread/{page_num}.json")
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return {"page_num": page_num, "text": "", "saved": False}
+        raise
+
+
+@app.put("/api/books/{book_id}/whole-page-proofread/{page_num}")
+async def put_whole_page_proofread(book_id: str, page_num: int, request: Request) -> dict[str, Any]:
+    if page_num < 1 or page_num > whole_page_book_count(book_id):
+        raise HTTPException(400, "页码超出范围")
+    payload = await request.json()
+    text = payload.get("text") if isinstance(payload, dict) else None
+    if not isinstance(text, str) or len(text) > 50_000:
+        raise HTTPException(400, "正确版须为不超过 50000 字的文本")
+    result = {
+        "page_num": page_num,
+        "text": text,
+        "saved": True,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "manual",
+    }
+    write_json(book_id, f"whole-page-proofread/{page_num}.json", result)
+    return result
+
+
 @app.get("/api/books/{book_id}/assignments")
 def get_assignments(book_id: str) -> dict[str, Any]:
     if not collaboration.configured():

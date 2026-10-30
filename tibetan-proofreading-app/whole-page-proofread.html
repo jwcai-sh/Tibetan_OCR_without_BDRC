@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>整页藏文校对 · Gemini 4 / 教师校正稿 / Yigdzin1</title>
+  <style>
+    :root { color: #1e2d3a; background: #f3f6f9; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #18334b; color: white; padding: 18px 24px; }
+    h1 { margin: 0 0 5px; font-size: 22px; }
+    header p { margin: 0; color: #dcecf8; }
+    a { color: #28649a; }
+    .toolbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 24px; background: white; border-bottom: 1px solid #d8e1ea; }
+    button { border: 1px solid #a7b9ca; border-radius: 7px; background: white; color: #254660; padding: 7px 12px; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    #pageInput { width: 60px; padding: 7px; border: 1px solid #a7b9ca; border-radius: 7px; font: inherit; text-align: center; }
+    #pageIndex { display: flex; flex-wrap: wrap; gap: 5px; padding: 12px 24px 2px; }
+    #pageIndex button { min-width: 33px; padding: 4px 7px; border-radius: 18px; font-size: 13px; }
+    #pageIndex button.active { background: #28649a; border-color: #28649a; color: white; }
+    #feedback { margin: 10px 24px; padding: 9px 12px; border-radius: 7px; background: #e7f1f9; min-height: 38px; }
+    #feedback.error { color: #9a2926; background: #fff0ec; }
+    main { display: flex; flex-direction: column; gap: 12px; padding: 0 24px 24px; }
+    section { min-width: 0; padding: 12px; background: white; border: 1px solid #d8e1ea; border-radius: 9px; }
+    h2 { margin: 0; font-size: 17px; }
+    .heading { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
+    .heading button { margin-left: auto; }
+    .image-viewport { max-height: 58vh; overflow: auto; text-align: center; }
+    #pageScan { display: block; width: 100%; height: auto; margin: auto; }
+    .model-text, #correctedText { white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-family: "Noto Serif Tibetan", "Kailasa", serif; font-size: 23px; line-height: 1.65; }
+    .model-text { min-height: 55px; }
+    .model-text.missing { color: #9a5250; font-family: system-ui, sans-serif; font-size: 15px; }
+    mark.different { background: #fff08a; color: inherit; border-radius: 2px; }
+    .omission { display: inline-block; width: 3px; height: 1.05em; margin: 0 2px; background: #ea7a2b; vertical-align: -.15em; border-radius: 2px; }
+    #gemini4Panel { border-color: #9dc5e5; background: #f3f9ff; }
+    #correctedText { display: block; width: 100%; min-height: 240px; padding: 9px; border: 1px solid #a7b9ca; border-radius: 6px; resize: vertical; }
+    #saveCorrected { background: #28649a; border-color: #28649a; color: white; }
+    .hint { margin: 0 0 9px; color: #526474; font-size: 13px; }
+    .import-controls { margin-left: auto; font-size: 13px; }
+    .import-controls label { display: inline-block; margin: 4px 8px; }
+    .import-controls input { max-width: 185px; }
+    @media (max-width: 700px) { header, .toolbar, #pageIndex, main { padding-left: 12px; padding-right: 12px; } #feedback { margin-left: 12px; margin-right: 12px; } .image-viewport { max-height: 48vh; } .model-text, #correctedText { font-size: 20px; } }
+  </style>
+</head>
+<body>
+  <header><h1>整页藏文校对</h1><p><strong id="bookName">正在读取书籍…</strong> · 原图在上，三个候选在下；以 Gemini 4 原始结果为差异基准。</p></header>
+  <div class="toolbar">
+    <button id="previous" type="button">上一页</button>
+    <input id="pageInput" type="number" min="1" aria-label="当前页码" />
+    <strong id="pageNumber">— / —</strong>
+    <button id="next" type="button">下一页</button>
+    <a id="backToWorkbench" href="/tibetan-proofreading-app/">返回逐行工作台</a>
+    <details class="import-controls"><summary>导入整页候选</summary>
+      <label>教师校正稿 TXT <input id="teacherImport" type="file" accept=".txt,text/plain" /></label>
+      <label>Yigdzin1 TXT <input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label>
+    </details>
+  </div>
+  <nav id="pageIndex" aria-label="选择 PDF 页码"></nav>
+  <div id="feedback" role="status" aria-live="polite">正在读取云端结果…</div>
+  <main>
+    <section><div class="heading"><h2>原图</h2><button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button></div><div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div></section>
+    <section id="gemini4Panel"><div class="heading"><h2>Gemini 4 · 差异基准</h2><button id="copyGemini" type="button">填入正确版</button></div><div id="gemini4Text" class="model-text"></div></section>
+    <section><div class="heading"><h2>教师校正稿</h2></div><div id="teacherText" class="model-text"></div></section>
+    <section><div class="heading"><h2>Yigdzin1</h2></div><div id="yigdzin1Text" class="model-text"></div></section>
+    <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 4 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
+  </main>
+  <script src="./whole-page-proofread.js?v=20261030-v1" defer></script>
+</body>
+</html>

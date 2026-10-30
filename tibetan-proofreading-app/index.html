@@ -47,7 +47,7 @@
     <link rel="stylesheet" href="./styles.css?v=20261030-gemini4-v2" onerror="window.__tibetanWorkbenchBootFailure()" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261030-gemini4-v1" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
+    <script src="./app.js?v=20261030-whole-page-v1" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -414,6 +414,7 @@
           <section id="gemini4Panel" class="gemini4-panel" hidden aria-label="Gemini 4 逐页识别结果">
             <div class="gemini4-heading">
               <strong>Gemini 4 · 第 <span id="gemini4PageNumber">1</span> 页</strong>
+              <a id="wholePageProofreadLink" href="./whole-page-proofread.html">整页校对 →</a>
               <button id="gemini4ImportButton" class="ghost-button compact" type="button">导入 24 页 TXT</button>
               <input id="gemini4ImportInput" type="file" accept=".txt,text/plain" hidden />
             </div>
