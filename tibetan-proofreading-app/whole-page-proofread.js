@@ -71,7 +71,11 @@
       .filter(page => mode !== 'remaining' || !String(pages?.[String(page)] || '').trim());
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition };
+  function defaultPreviewFlip(bookId, page) {
+    return bookId === 'a3a76874e921481e9d1bd53626f40e99' && page === 1;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, defaultPreviewFlip };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -81,6 +85,15 @@
   const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, pages: {}, pageModels: {}, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
+  const previewFlipKey = page => `whole-page-preview-flip:${bookId}:${page}`;
+
+  function applyPreviewFlip(page) {
+    let stored = null;
+    try { stored = root.localStorage.getItem(previewFlipKey(page)); } catch { /* Default remains available. */ }
+    const flipped = stored === null ? defaultPreviewFlip(bookId, page) : stored === 'true';
+    $('pageScan').style.transform = flipped ? 'rotate(180deg)' : '';
+    $('rotatePreview').setAttribute('aria-pressed', String(flipped));
+  }
 
   function feedback(message, error = false) {
     $('feedback').textContent = message;
@@ -166,6 +179,7 @@
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
     for (const key of MODEL_KEYS) renderCandidate(key);
+    applyPreviewFlip(page);
     $('pageScan').src = endpoint(`/pages/${page}/preview?dpi=200&format=jpeg&landscape=true`);
     $('pageScan').alt = `原始 PDF 第 ${page} 页`;
     $('correctedText').value = '';
@@ -374,6 +388,12 @@
   });
   $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
   $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
+  $('rotatePreview').addEventListener('click', () => {
+    const flipped = $('rotatePreview').getAttribute('aria-pressed') !== 'true';
+    try { root.localStorage.setItem(previewFlipKey(state.page), String(flipped)); } catch { /* This session still rotates. */ }
+    $('pageScan').style.transform = flipped ? 'rotate(180deg)' : '';
+    $('rotatePreview').setAttribute('aria-pressed', String(flipped));
+  });
 
   async function start() {
     void loadCollaborationActor();

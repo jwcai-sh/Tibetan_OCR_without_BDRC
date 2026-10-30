@@ -2,7 +2,13 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile, pagesForRecognition } = require('../whole-page-proofread.js');
+const { diffSegments, parsePageTextFile, pagesForRecognition, defaultPreviewFlip } = require('../whole-page-proofread.js');
+
+test('only the inverted first page of the reported book gets a default flip', () => {
+  assert.equal(defaultPreviewFlip('a3a76874e921481e9d1bd53626f40e99', 1), true);
+  assert.equal(defaultPreviewFlip('a3a76874e921481e9d1bd53626f40e99', 2), false);
+  assert.equal(defaultPreviewFlip('another-book', 1), false);
+});
 
 test('batch page selection includes every page or only pages without Gemini text', () => {
   const pages = { '1': 'ཀ་', '2': '  ', '4': 'ཁ་' };
