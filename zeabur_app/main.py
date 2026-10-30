@@ -119,7 +119,7 @@ def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, d
             raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
         page = document.load_page(page_num - 1)
         bounded_dpi = min(dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
-        rotate = 90 if landscape and page.rect.height > page.rect.width * 1.5 else 0
+        rotate = 270 if landscape and page.rect.height > page.rect.width * 1.5 else 0
         matrix = fitz.Matrix(bounded_dpi / 72, bounded_dpi / 72).prerotate(rotate)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
