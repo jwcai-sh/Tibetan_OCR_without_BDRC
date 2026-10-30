@@ -88,6 +88,17 @@
     return payload;
   }
 
+  async function loadCollaborationActor() {
+    try {
+      const actor = await requestJson('/api/collaboration/me');
+      $('collaborationActor').textContent = actor.name ? `协作者：${actor.name}` : '协作者：未登录';
+      $('collaborationLogout').hidden = !actor.name;
+    } catch {
+      $('collaborationActor').textContent = '协作者：未登录';
+      $('collaborationLogout').hidden = true;
+    }
+  }
+
   function geminiLabel(page = state.page) {
     const model = String(state.pageModels[String(page)] || 'gemini:gemini-4-argon').replace(/^gemini:/, '');
     return [...$('geminiRecognitionModel').options].find(option => option.value === model)?.textContent || model;
@@ -298,10 +309,19 @@
   $('backToWorkbench').href = bookId
     ? `/tibetan-proofreading-app/?workflow=ocr&book_id=${encodeURIComponent(bookId)}&view=line`
     : '/tibetan-proofreading-app/';
+  $('manageProject').href = $('backToWorkbench').href;
+  $('collaborationLogout').addEventListener('click', async event => {
+    event.preventDefault();
+    try {
+      await requestJson('/api/collaboration/logout', { method: 'POST' });
+      root.location.assign('/tibetan-proofreading-app/');
+    } catch (error) { feedback(`退出协作失败：${error.message}`, true); }
+  });
   $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
   $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
 
   async function start() {
+    void loadCollaborationActor();
     if (!bookId) { $('bookName').textContent = '尚未选择 PDF'; feedback('请点击右侧“导入文件”，上传 PDF 创建项目。'); return; }
     try {
       const info = await requestJson(endpoint('/document-info'));

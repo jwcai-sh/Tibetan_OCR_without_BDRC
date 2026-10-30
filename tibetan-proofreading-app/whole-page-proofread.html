@@ -7,11 +7,18 @@
   <style>
     :root { color: #1e2d3a; background: #f3f6f9; font-family: system-ui, sans-serif; }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     body { margin: 0; }
-    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; background: #18334b; color: white; padding: 18px 24px; }
-    header a { color: white; font-weight: 600; white-space: nowrap; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 24px; background: white; border-bottom: 1px solid #d8e1ea; }
+    .brand { display: flex; align-items: center; gap: 14px; min-width: 0; color: #17211d; font-weight: 700; font-size: 18px; }
+    .brand-mark { display: grid; place-items: center; width: 40px; height: 40px; flex: none; border-radius: 8px; color: white; background: linear-gradient(135deg, #23734d, #e27d2f); }
+    .header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+    .header-actions a { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 10px; border: 1px solid #d6e0dc; border-radius: 7px; color: #17211d; text-decoration: none; white-space: nowrap; }
+    .header-actions a:hover { background: #eef5f2; }
+    #collaborationActor { white-space: nowrap; }
+    .page-heading { padding: 13px 24px 5px; }
     h1 { margin: 0 0 5px; font-size: 22px; }
-    header p { margin: 0; color: #dcecf8; }
+    .page-heading p { margin: 0; color: #526474; }
     a { color: #28649a; }
     .toolbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 24px; background: white; border-bottom: 1px solid #d8e1ea; }
     button { border: 1px solid #a7b9ca; border-radius: 7px; background: white; color: #254660; padding: 7px 12px; font: inherit; cursor: pointer; }
@@ -20,7 +27,7 @@
     #pageIndex { display: flex; flex-wrap: wrap; gap: 5px; padding: 12px 24px 2px; }
     #pageIndex button { min-width: 33px; padding: 4px 7px; border-radius: 18px; font-size: 13px; }
     #pageIndex button.active { background: #28649a; border-color: #28649a; color: white; }
-    #feedback { margin: 10px 24px; padding: 9px 12px; border-radius: 7px; background: #e7f1f9; min-height: 38px; }
+    #feedback { margin: 0; padding: 9px 24px; color: #995b1b; background: #fff5e4; min-height: 38px; }
     #feedback.error { color: #9a2926; background: #fff0ec; }
     main { display: flex; flex-direction: column; gap: 12px; padding: 0 24px 24px; }
     section, .model-panel { min-width: 0; padding: 12px; background: white; border: 1px solid #d8e1ea; border-radius: 9px; }
@@ -54,12 +61,14 @@
     .import-fields label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .import-fields input { max-width: 190px; }
     .import-fields small { color: #526474; }
-    @media (max-width: 700px) { header { flex-wrap: wrap; } .import-fields { right: 12px; left: 12px; min-width: 0; } }
-    @media (max-width: 700px) { header, .toolbar, #pageIndex, main { padding-left: 12px; padding-right: 12px; } #feedback { margin-left: 12px; margin-right: 12px; } .image-viewport { max-height: 48vh; } .model-text, #correctedText { font-size: 20px; } }
+    @media (max-width: 700px) { header { flex-wrap: wrap; } .header-actions { justify-content: flex-start; } .import-fields { right: 12px; left: 12px; min-width: 0; } }
+    @media (max-width: 700px) { header, .toolbar, #pageIndex, main, .page-heading { padding-left: 12px; padding-right: 12px; } #feedback { padding-left: 12px; padding-right: 12px; } .image-viewport { max-height: 48vh; } .model-text, #correctedText { font-size: 20px; } }
   </style>
 </head>
 <body>
-  <header><div><h1>整页藏文校对</h1><p><strong id="bookName">正在读取书籍…</strong> · 原图在上，三个候选在下；以 Gemini 识别结果为差异基准。</p></div><a id="backToWorkbench" href="/tibetan-proofreading-app/">返回逐行工作台 →</a></header>
+  <header><div class="brand"><span class="brand-mark" aria-hidden="true">藏</span><span>藏文典籍翻译工作台</span></div><nav class="header-actions" aria-label="项目操作"><span id="collaborationActor">协作者：读取中…</span><a id="collaborationLogout" href="/tibetan-proofreading-app/" hidden>退出</a><a href="/tibetan-proofreading-app/">主页</a><a href="./whole-page-proofread.html">新建项目</a><a id="manageProject" href="/tibetan-proofreading-app/">管理/删除项目</a><a id="backToWorkbench" href="/tibetan-proofreading-app/">返回逐行工作台 →</a></nav></header>
+  <div id="feedback" role="status" aria-live="polite">正在读取云端结果…</div>
+  <div class="page-heading"><h1>整页藏文校对</h1><p><strong id="bookName">正在读取书籍…</strong> · 原图在上，三个候选在下；以 Gemini 识别结果为差异基准。</p></div>
   <div class="toolbar">
     <button id="previous" type="button">上一页</button>
     <input id="pageInput" type="number" min="1" aria-label="当前页码" />
@@ -75,7 +84,6 @@
     </details>
   </div>
   <nav id="pageIndex" aria-label="选择 PDF 页码"></nav>
-  <div id="feedback" role="status" aria-live="polite">正在读取云端结果…</div>
   <main>
     <section><div class="heading"><h2>原图</h2><button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button></div><div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div></section>
     <details id="gemini4Panel" class="model-panel" open><summary><span id="geminiModelLabel">Gemini 4 · 差异基准</span></summary><div class="model-actions"><select id="geminiRecognitionModel" aria-label="Gemini 识别模型"><option value="gemini-4-argon">Gemini 4 Argon</option><option value="gemini-3.8-flash">Gemini 3.8 Flash</option><option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select><button id="recognizeGemini" type="button">识别</button><button id="copyGemini" type="button">填入正确版</button></div><p id="geminiRecognitionFeedback" role="alert"></p><div id="gemini4Text" class="model-text"></div></details>
@@ -83,6 +91,6 @@
     <details class="model-panel" open><summary>Yigdzin1</summary><div id="yigdzin1Text" class="model-text"></div></details>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261030-v4" defer></script>
+  <script src="./whole-page-proofread.js?v=20261030-v5" defer></script>
 </body>
 </html>
