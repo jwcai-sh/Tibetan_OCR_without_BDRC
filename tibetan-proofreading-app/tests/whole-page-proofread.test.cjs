@@ -2,7 +2,13 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile } = require('../whole-page-proofread.js');
+const { diffSegments, parsePageTextFile, pagesForRecognition } = require('../whole-page-proofread.js');
+
+test('batch page selection includes every page or only pages without Gemini text', () => {
+  const pages = { '1': 'ཀ་', '2': '  ', '4': 'ཁ་' };
+  assert.deepEqual(pagesForRecognition(4, pages, 'all'), [1, 2, 3, 4]);
+  assert.deepEqual(pagesForRecognition(4, pages, 'remaining'), [2, 3]);
+});
 
 test('Gemini panel offers model selection and current-page recognition', () => {
   const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
