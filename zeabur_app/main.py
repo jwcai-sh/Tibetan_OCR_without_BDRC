@@ -111,7 +111,7 @@ _pdf_page_render_lock = threading.Lock()
 
 
 @lru_cache(maxsize=8)
-def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False) -> bytes:
+def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False, rotation: int = 0) -> bytes:
     import fitz
 
     with fitz.open(stream=cached_pdf_source(source_key, source_size), filetype="pdf") as document:
@@ -119,17 +119,17 @@ def _cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, d
             raise HTTPException(400, f"页码超出范围：{page_num} / {document.page_count}")
         page = document.load_page(page_num - 1)
         bounded_dpi = min(dpi, max(72, int(4200 * 72 / max(page.rect.width, page.rect.height, 1))))
-        rotate = 270 if landscape and page.rect.height > page.rect.width * 1.5 else 0
+        rotate = ((270 if landscape and page.rect.height > page.rect.width * 1.5 else 0) + rotation) % 360
         matrix = fitz.Matrix(bounded_dpi / 72, bounded_dpi / 72).prerotate(rotate)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
         return pixmap.tobytes("jpeg", jpg_quality=75) if preview_format == "jpeg" else pixmap.tobytes("png")
 
 
-def cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False) -> bytes:
+def cached_pdf_page_preview(source_key: str, source_size: int, page_num: int, dpi: int, preview_format: str, landscape: bool = False, rotation: int = 0) -> bytes:
     # A new collaborator requests several crops from the same page at once.
     # Coalesce those full-page renders and bound concurrent PDF work per worker.
     with _pdf_page_render_lock:
-        return _cached_pdf_page_preview(source_key, source_size, page_num, dpi, preview_format, landscape)
+        return _cached_pdf_page_preview(source_key, source_size, page_num, dpi, preview_format, landscape, rotation)
 
 
 def require_library_access(authorization: str) -> None:
@@ -516,17 +516,19 @@ def get_book_source(book_id: str, request: Request) -> Response:
 
 
 @app.get("/api/books/{book_id}/pages/{page_num}/preview")
-def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: str = "png", landscape: bool = False) -> Response:
+def get_book_page_preview(book_id: str, page_num: int, dpi: int = 144, format: str = "png", landscape: bool = False, rotation: int = 0) -> Response:
     metadata = read_json(book_id, "metadata.json")
     source_key = str(metadata.get("source_key") or "")
     if not source_key or not str(metadata.get("name") or "").lower().endswith(".pdf"):
         raise HTTPException(404, "PDF 源文件不存在")
     if page_num < 1:
         raise HTTPException(400, "页码必须大于零")
+    if rotation not in (0, 90, 180, 270):
+        raise HTTPException(400, "旋转角度只能是 0、90、180 或 270 度")
     safe_dpi = min(360, max(72, dpi))
     preview_format = "jpeg" if format.lower() in ("jpeg", "jpg") else "png"
     try:
-        image_bytes = cached_pdf_page_preview(source_key, int(metadata.get("size") or 0), page_num, safe_dpi, preview_format, landscape)
+        image_bytes = cached_pdf_page_preview(source_key, int(metadata.get("size") or 0), page_num, safe_dpi, preview_format, landscape, rotation)
     except HTTPException:
         raise
     except oss2.exceptions.NoSuchKey as exc:

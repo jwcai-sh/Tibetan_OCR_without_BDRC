@@ -71,28 +71,49 @@
       .filter(page => mode !== 'remaining' || !String(pages?.[String(page)] || '').trim());
   }
 
-  function defaultPreviewFlip(bookId, page) {
-    return bookId === 'a3a76874e921481e9d1bd53626f40e99' && page === 1;
+  function normalizeRotation(degrees) {
+    return ((Number(degrees) || 0) % 360 + 360) % 360;
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, defaultPreviewFlip };
+  function defaultPreviewRotation(bookId, sourceName, pageCount, page) {
+    const fileName = String(sourceName).trim().split(/[\\/]/).pop().toLowerCase();
+    return page === 1 && (bookId === 'a3a76874e921481e9d1bd53626f40e99'
+      || (fileName === '1.pdf' && pageCount === 24)) ? 180 : 0;
+  }
+
+  function effectivePreviewRotation(bookId, sourceName, pageCount, page, documentRotation, pageRotation) {
+    return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
+  }
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
   $('topImportControls').hidden = Boolean(bookId);
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, pages: {}, pageModels: {}, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchStop: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
-  const previewFlipKey = page => `whole-page-preview-flip:${bookId}:${page}`;
+  const rotationKey = scope => `whole-page-preview-rotation-v2:${bookId}:${scope}`;
 
-  function applyPreviewFlip(page) {
-    let stored = null;
-    try { stored = root.localStorage.getItem(previewFlipKey(page)); } catch { /* Default remains available. */ }
-    const flipped = stored === null ? defaultPreviewFlip(bookId, page) : stored === 'true';
-    $('pageScan').style.transform = flipped ? 'rotate(180deg)' : '';
-    $('rotatePreview').setAttribute('aria-pressed', String(flipped));
+  function storedRotation(scope) {
+    try {
+      const value = Number(root.localStorage.getItem(rotationKey(scope)));
+      return [0, 90, 180, 270].includes(value) ? value : 0;
+    } catch { return 0; }
+  }
+
+  function pageRotation(page) {
+    if (!Object.prototype.hasOwnProperty.call(state.pageRotations, page)) state.pageRotations[page] = storedRotation(`page:${page}`);
+    return state.pageRotations[page];
+  }
+
+  function renderPagePreview() {
+    const rotation = effectivePreviewRotation(bookId, state.sourceName, state.count, state.page, state.documentRotation, pageRotation(state.page));
+    $('pageScan').src = endpoint(`/pages/${state.page}/preview?dpi=200&format=jpeg&landscape=true&rotation=${rotation}`);
+    $('pageScan').alt = `原始 PDF 第 ${state.page} 页，预览旋转 ${rotation} 度`;
+    $('previewRotationStatus').textContent = `本页 ${rotation}° · 整本补充旋转 ${state.documentRotation}°`;
   }
 
   function feedback(message, error = false) {
@@ -179,9 +200,7 @@
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
     for (const key of MODEL_KEYS) renderCandidate(key);
-    applyPreviewFlip(page);
-    $('pageScan').src = endpoint(`/pages/${page}/preview?dpi=200&format=jpeg&landscape=true`);
-    $('pageScan').alt = `原始 PDF 第 ${page} 页`;
+    renderPagePreview();
     $('correctedText').value = '';
     $('saveCorrected').disabled = true;
     const url = new URL(root.location.href);
@@ -388,12 +407,21 @@
   });
   $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
   $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
-  $('rotatePreview').addEventListener('click', () => {
-    const flipped = $('rotatePreview').getAttribute('aria-pressed') !== 'true';
-    try { root.localStorage.setItem(previewFlipKey(state.page), String(flipped)); } catch { /* This session still rotates. */ }
-    $('pageScan').style.transform = flipped ? 'rotate(180deg)' : '';
-    $('rotatePreview').setAttribute('aria-pressed', String(flipped));
-  });
+  for (const button of root.document.querySelectorAll('[data-rotation-scope]')) {
+    button.addEventListener('click', () => {
+      const scope = button.dataset.rotationScope;
+      const degrees = button.dataset.rotationDegrees === 'reset' ? null : Number(button.dataset.rotationDegrees);
+      if (scope === 'document') {
+        state.documentRotation = degrees === null ? 0 : normalizeRotation(state.documentRotation + degrees);
+        try { root.localStorage.setItem(rotationKey('document'), String(state.documentRotation)); } catch { /* Session setting still works. */ }
+      } else {
+        state.pageRotations[state.page] = degrees === null ? 0 : normalizeRotation(pageRotation(state.page) + degrees);
+        try { root.localStorage.setItem(rotationKey(`page:${state.page}`), String(state.pageRotations[state.page])); } catch { /* Session setting still works. */ }
+      }
+      $(scope === 'document' ? 'rotateDocumentMenu' : 'rotatePageMenu').open = false;
+      renderPagePreview();
+    });
+  }
 
   async function start() {
     void loadCollaborationActor();
@@ -402,6 +430,8 @@
       const info = await requestJson(endpoint('/document-info'));
       state.count = Number(info.page_count) || 0;
       if (!state.count) throw new Error('书籍没有可预览的 PDF 页面');
+      state.sourceName = info.name || '';
+      state.documentRotation = storedRotation('document');
       $('bookName').textContent = info.name || '藏文典籍';
       $('pageIndex').replaceChildren();
       for (let page = 1; page <= state.count; page += 1) {

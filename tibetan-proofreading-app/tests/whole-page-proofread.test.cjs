@@ -2,12 +2,21 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile, pagesForRecognition, defaultPreviewFlip } = require('../whole-page-proofread.js');
+const { diffSegments, parsePageTextFile, pagesForRecognition, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
 
-test('only the inverted first page of the reported book gets a default flip', () => {
-  assert.equal(defaultPreviewFlip('a3a76874e921481e9d1bd53626f40e99', 1), true);
-  assert.equal(defaultPreviewFlip('a3a76874e921481e9d1bd53626f40e99', 2), false);
-  assert.equal(defaultPreviewFlip('another-book', 1), false);
+test('the inverted first page defaults upright for the original and reopened 24-page book', () => {
+  assert.equal(defaultPreviewRotation('a3a76874e921481e9d1bd53626f40e99', '1.pdf', 24, 1), 180);
+  assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 1), 180);
+  assert.equal(defaultPreviewRotation('new-project-id', '藏文/1.pdf', 24, 1), 180);
+  assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 2), 0);
+  assert.equal(defaultPreviewRotation('another-book', 'other.pdf', 24, 1), 0);
+});
+
+test('page and document turns accumulate and wrap at a full circle', () => {
+  assert.equal(normalizeRotation(-90), 270);
+  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 0, 0), 180);
+  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 90, 90), 0);
+  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 2, 90, 0), 90);
 });
 
 test('batch page selection includes every page or only pages without Gemini text', () => {

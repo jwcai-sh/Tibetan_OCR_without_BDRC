@@ -1,4 +1,5 @@
 import json
+import io
 import struct
 import unittest
 from datetime import datetime, timezone
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 import oss2
 import fitz
+from PIL import Image
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -67,7 +69,8 @@ class CloudLibraryTest(unittest.TestCase):
 
     def test_whole_page_uses_pdf_count_and_rotates_tall_preview_on_request(self):
         document = fitz.open()
-        document.new_page(width=100, height=500)
+        page = document.new_page(width=100, height=500)
+        page.draw_rect(fitz.Rect(5, 5, 25, 45), color=(1, 0, 0), fill=(1, 0, 0))
         pdf = document.tobytes()
         document.close()
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
@@ -80,11 +83,30 @@ class CloudLibraryTest(unittest.TestCase):
             self.assertEqual(self.client.put(f"/api/books/{book_id}/whole-page-proofread/1", json={"text": "བོད་"}).status_code, 200)
             portrait = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png")
             landscape = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png&landscape=true")
-        self.assertEqual((portrait.status_code, landscape.status_code), (200, 200))
+            quarter_turn = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png&landscape=true&rotation=90")
+            half_turn = self.client.get(f"/api/books/{book_id}/pages/1/preview?dpi=100&format=png&landscape=true&rotation=180")
+            invalid_turn = self.client.get(f"/api/books/{book_id}/pages/1/preview?rotation=45")
+        self.assertEqual((portrait.status_code, landscape.status_code, quarter_turn.status_code, half_turn.status_code, invalid_turn.status_code), (200, 200, 200, 200, 400))
         pw, ph = struct.unpack(">II", portrait.content[16:24])
         lw, lh = struct.unpack(">II", landscape.content[16:24])
+        qw, qh = struct.unpack(">II", quarter_turn.content[16:24])
+        hw, hh = struct.unpack(">II", half_turn.content[16:24])
         self.assertLess(pw, ph)
         self.assertGreater(lw, lh)
+        self.assertLess(qw, qh)
+        self.assertEqual((hw, hh), (lw, lh))
+        def marker_center(content):
+            image = Image.open(io.BytesIO(content)).convert("RGB")
+            pixels = image.load()
+            points = [(x, y) for y in range(image.height) for x in range(image.width)
+                      if pixels[x, y][0] > 180 and pixels[x, y][1] < 100 and pixels[x, y][2] < 100]
+            self.assertTrue(points)
+            return sum(x for x, _ in points) / len(points), sum(y for _, y in points) / len(points)
+        before_x, before_y = marker_center(landscape.content)
+        after_x, after_y = marker_center(half_turn.content)
+        self.assertGreater(abs(before_x - after_x), lw / 2)
+        self.assertAlmostEqual(before_x + after_x, lw, delta=lw * 0.05)
+        self.assertAlmostEqual(before_y + after_y, lh, delta=lh * 0.1)
 
     def test_listing_requires_password_and_uses_only_library_prefix(self):
         objects = [SimpleNamespace(key="待识别文档/经书/第一册.pdf", size=9,
