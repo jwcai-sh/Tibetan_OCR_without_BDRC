@@ -22,10 +22,17 @@
     #feedback { margin: 10px 24px; padding: 9px 12px; border-radius: 7px; background: #e7f1f9; min-height: 38px; }
     #feedback.error { color: #9a2926; background: #fff0ec; }
     main { display: flex; flex-direction: column; gap: 12px; padding: 0 24px 24px; }
-    section { min-width: 0; padding: 12px; background: white; border: 1px solid #d8e1ea; border-radius: 9px; }
+    section, .model-panel { min-width: 0; padding: 12px; background: white; border: 1px solid #d8e1ea; border-radius: 9px; }
     h2 { margin: 0; font-size: 17px; }
     .heading { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
     .heading button:first-of-type { margin-left: auto; }
+    .model-panel summary { display: flex; align-items: center; gap: 10px; list-style: none; cursor: pointer; font-size: 17px; font-weight: 700; }
+    .model-panel summary::-webkit-details-marker { display: none; }
+    .model-panel summary::before { content: ''; width: 8px; height: 8px; flex: none; border-right: 2px solid #45627c; border-bottom: 2px solid #45627c; transform: rotate(-45deg); transition: transform .15s ease; }
+    .model-panel[open] summary::before { transform: rotate(45deg); }
+    .model-panel summary:focus-visible { outline: 2px solid #28649a; outline-offset: 4px; border-radius: 3px; }
+    .model-panel .model-text { margin-top: 9px; }
+    .model-actions { text-align: right; margin-top: 9px; }
     .image-viewport { max-height: 58vh; overflow: auto; text-align: center; }
     #pageScan { display: block; width: 100%; height: auto; margin: auto; }
     .model-text, #correctedText { white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; font-family: "Noto Serif Tibetan", "Kailasa", serif; font-size: 23px; line-height: 1.65; }
@@ -60,9 +67,9 @@
   <div id="feedback" role="status" aria-live="polite">正在读取云端结果…</div>
   <main>
     <section><div class="heading"><h2>原图</h2><button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button></div><div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div></section>
-    <section id="gemini4Panel"><div class="heading"><h2>Gemini 4 · 差异基准</h2><button id="copyGemini" type="button">填入正确版</button></div><div id="gemini4Text" class="model-text"></div></section>
-    <section><div class="heading"><h2>教师校正稿</h2></div><div id="teacherText" class="model-text"></div></section>
-    <section><div class="heading"><h2>Yigdzin1</h2></div><div id="yigdzin1Text" class="model-text"></div></section>
+    <details id="gemini4Panel" class="model-panel" open><summary>Gemini 4 · 差异基准</summary><div class="model-actions"><button id="copyGemini" type="button">填入正确版</button></div><div id="gemini4Text" class="model-text"></div></details>
+    <details class="model-panel" open><summary>教师校正稿</summary><div id="teacherText" class="model-text"></div></details>
+    <details class="model-panel" open><summary>Yigdzin1</summary><div id="yigdzin1Text" class="model-text"></div></details>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 4 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
   <script src="./whole-page-proofread.js?v=20261030-v2" defer></script>
