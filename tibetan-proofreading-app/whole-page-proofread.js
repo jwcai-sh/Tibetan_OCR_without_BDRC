@@ -414,7 +414,6 @@
   $('backToWorkbench').href = bookId
     ? `/tibetan-proofreading-app/?workflow=ocr&book_id=${encodeURIComponent(bookId)}&view=line`
     : '/tibetan-proofreading-app/';
-  $('manageProject').href = $('backToWorkbench').href;
   $('collaborationLogout').addEventListener('click', async event => {
     event.preventDefault();
     try {
