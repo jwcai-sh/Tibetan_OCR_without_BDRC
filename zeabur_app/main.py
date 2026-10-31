@@ -251,19 +251,29 @@ def list_library(request: Request, authorization: str = Header(default="")) -> d
         require_library_access(authorization)
     items = []
     truncated = False
-    for obj in oss2.ObjectIterator(oss_bucket(), prefix=LIBRARY_PREFIX, max_keys=100):
-        relative_path = obj.key[len(LIBRARY_PREFIX):]
-        if not relative_path or relative_path.endswith("/") or relative_path.startswith("."):
-            continue
-        if len(items) >= LIBRARY_LIMIT:
-            truncated = True
-            break
-        modified = getattr(obj, "last_modified", None)
-        items.append({
-            "path": relative_path,
-            "size": int(getattr(obj, "size", 0) or 0),
-            "updated_at": datetime.fromtimestamp(modified, timezone.utc).isoformat() if isinstance(modified, (int, float)) else str(modified or ""),
-        })
+    try:
+        for obj in oss2.ObjectIterator(oss_bucket(), prefix=LIBRARY_PREFIX, max_keys=100):
+            relative_path = obj.key[len(LIBRARY_PREFIX):]
+            if not relative_path or relative_path.endswith("/") or relative_path.startswith("."):
+                continue
+            if len(items) >= LIBRARY_LIMIT:
+                truncated = True
+                break
+            modified = getattr(obj, "last_modified", None)
+            items.append({
+                "path": relative_path,
+                "size": int(getattr(obj, "size", 0) or 0),
+                "updated_at": datetime.fromtimestamp(modified, timezone.utc).isoformat() if isinstance(modified, (int, float)) else str(modified or ""),
+            })
+    except oss2.exceptions.OssError as exc:
+        code = re.sub(r"[^a-zA-Z0-9_.-]", "", str(getattr(exc, "code", "") or type(exc).__name__))[:96]
+        request_id = re.sub(r"[^a-zA-Z0-9_.-]", "", str(getattr(exc, "request_id", "") or ""))[:96]
+        logging.warning("library_list_failed code=%s request_id=%s", code, request_id)
+        if code == "UserDisable":
+            message = "OSS 账号被禁用或服务未开通，请在阿里云控制台检查账号状态、费用及安全通知"
+        else:
+            message = "云端目录读取失败，请检查 OSS 服务状态并稍后重试"
+        raise HTTPException(502, f"{message}（OSS 错误码：{code}" + (f"；请求编号：{request_id}" if request_id else "") + "）") from exc
     return {"folder": LIBRARY_PREFIX.rstrip("/"), "items": items, "truncated": truncated}
 
 

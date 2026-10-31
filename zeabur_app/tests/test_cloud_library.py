@@ -118,6 +118,16 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(response.json()["items"][0]["path"], "经书/第一册.pdf")
         self.assertEqual(iterator.call_args.kwargs["prefix"], "待识别文档/")
 
+    def test_disabled_oss_account_is_reported_in_directory(self):
+        error = oss2.exceptions.ServerError(403, {"x-oss-request-id": "test-request"}, b"", {
+            "Code": "UserDisable", "RequestId": "test-request",
+        })
+        with patch.object(main.oss2, "ObjectIterator", side_effect=error):
+            response = self.client.get("/api/library", headers={"Authorization": "Bearer test-library-password"})
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("OSS 账号被禁用", response.json()["detail"])
+        self.assertIn("test-request", response.json()["detail"])
+
     def test_open_reuses_project_and_keeps_source_in_library(self):
         headers = {"Authorization": "Bearer test-library-password"}
         payload = {"path": "经书/第一册.pdf"}
