@@ -2,7 +2,22 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile, pagesForRecognition, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, parsePageTextFile, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+
+test('batch retries only failed pages and leaves successful pages untouched', async () => {
+  const attempts = [];
+  const waits = [];
+  const result = await recognizeWithRetries([1, 2, 3], async page => {
+    attempts.push(page);
+    if (page === 2 && attempts.filter(item => item === 2).length < 3) throw new Error('temporary');
+    if (page === 3) throw new Error('persistent');
+  }, { wait: async ms => { waits.push(ms); } });
+  assert.deepEqual(attempts, [1, 2, 3, 2, 3, 2, 3]);
+  assert.deepEqual(waits, [3000, 6000]);
+  assert.equal(result.completed, 2);
+  assert.deepEqual(result.failed, [3]);
+  assert.match(result.errors.get(3).message, /persistent/);
+});
 
 test('the inverted first page defaults upright for the original and reopened 24-page book', () => {
   assert.equal(defaultPreviewRotation('a3a76874e921481e9d1bd53626f40e99', '1.pdf', 24, 1), 180);

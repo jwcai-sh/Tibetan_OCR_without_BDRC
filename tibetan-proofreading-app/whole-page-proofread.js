@@ -71,6 +71,27 @@
       .filter(page => mode !== 'remaining' || !String(pages?.[String(page)] || '').trim());
   }
 
+  async function recognizeWithRetries(pages, recognize, options = {}) {
+    const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const shouldStop = options.shouldStop || (() => false);
+    const onAttempt = options.onAttempt || (() => {});
+    let pending = [...pages];
+    let completed = 0;
+    const errors = new Map();
+    for (let round = 1; round <= 3 && pending.length && !shouldStop(); round += 1) {
+      if (round > 1) await wait(round === 2 ? 3000 : 6000);
+      const failed = [];
+      for (const page of pending) {
+        if (shouldStop()) break;
+        onAttempt(page, round, completed, pages.length);
+        try { await recognize(page); completed += 1; errors.delete(page); }
+        catch (error) { failed.push(page); errors.set(page, error); }
+      }
+      pending = failed;
+    }
+    return { completed, failed: pending, errors, stopped: shouldStop() };
+  }
+
   function normalizeRotation(degrees) {
     return ((Number(degrees) || 0) % 360 + 360) % 360;
   }
@@ -85,7 +106,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -273,20 +294,16 @@
     state.batchStop = false;
     updateRecognitionControls();
     $('geminiRecognitionFeedback').textContent = '';
-    const failed = [];
-    let completed = 0;
-    for (const page of pages) {
-      if (state.batchStop) break;
-      feedback(`批量识别 ${completed + failed.length + 1}/${pages.length}：第 ${page} 页（${model}）…`);
-      try { await recognizeGeminiResult(page, model); completed += 1; }
-      catch (error) { failed.push(page); console.error(`第 ${page} 页识别失败`, error); }
-      updateRecognitionControls();
-    }
-    const stopped = state.batchStop;
+    const { completed, failed, errors, stopped } = await recognizeWithRetries(pages,
+      page => recognizeGeminiResult(page, model), {
+        shouldStop: () => state.batchStop,
+        onAttempt: (page, round, done, total) => feedback(`批量识别 ${done + 1}/${total}：第 ${page} 页（${model}，第 ${round}/3 次）…`),
+      });
+    for (const page of failed) console.error(`第 ${page} 页识别失败`, errors.get(page));
     state.batchRecognizing = false;
     state.batchStop = false;
     updateRecognitionControls();
-    const summary = `批量识别${stopped ? '已停止' : '已结束'}：成功 ${completed}/${pages.length} 页${failed.length ? `；失败页：${failed.join('、')}` : ''}。已保存的正确版未修改。`;
+    const summary = `批量识别${stopped ? '已停止' : '已结束'}：成功 ${completed}/${pages.length} 页${failed.length ? `；重试后仍失败：第 ${failed.join('、')} 页` : ''}。已保存的正确版未修改。`;
     $('geminiRecognitionFeedback').textContent = failed.length ? summary : '';
     feedback(summary, Boolean(failed.length));
   }
