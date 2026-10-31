@@ -53,9 +53,20 @@ def test_whole_page_recognition_rejects_incomplete_response():
         else:
             raise AssertionError('incomplete output must not be saved')
 
+def test_astra_whole_page_preserves_original_image_detail():
+    response = {'status': 'completed', 'output': [
+        {'type': 'message', 'content': [{'type': 'output_text', 'text': 'བོད་'}]}
+    ]}
+    with patch.object(server, 'OPENAI_REVIEW_API_KEY', 'test'), \
+         patch.object(server, 'OPENAI_REVIEW_MODEL', 'gpt-6-astra'), \
+         patch.object(server, 'post_json', return_value=response) as request:
+        server.call_openai_whole_page_recognition(b'image', 'page.png', 'transcribe')
+    assert request.call_args.args[1]['input'][0]['content'][1]['detail'] == 'original'
+
 if __name__ == '__main__':
     test_missing_config_never_calls_upstream()
     test_openai_routes_independently_and_returns_candidate()
     test_whole_page_recognition_uses_original_image_and_plain_text()
     test_whole_page_recognition_rejects_incomplete_response()
+    test_astra_whole_page_preserves_original_image_detail()
     print('OpenAI routing/configuration tests passed')

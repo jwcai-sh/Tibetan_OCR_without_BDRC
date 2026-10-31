@@ -1847,7 +1847,8 @@ def call_openai_whole_page_recognition(image_bytes: bytes, filename: str, prompt
         "model": OPENAI_REVIEW_MODEL, "store": False, "max_output_tokens": MAX_TOKENS,
         "input": [{"role": "user", "content": [
             {"type": "input_text", "text": prompt},
-            {"type": "input_image", "image_url": image_data_url(image_bytes, filename), "detail": "high"},
+            {"type": "input_image", "image_url": image_data_url(image_bytes, filename),
+             "detail": "original" if OPENAI_REVIEW_MODEL == "gpt-6-astra" else "high"},
         ]}],
     }, OPENAI_REVIEW_API_KEY, timeout=GEMINI_OCR_TIMEOUT)
     text = "".join(part.get("text", "") for item in raw.get("output", [])
