@@ -44,10 +44,10 @@
       };
       window.setTimeout(window.__tibetanWorkbenchBootFailure, 90000);
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20261030-gemini4-v2" onerror="window.__tibetanWorkbenchBootFailure()" />
+    <link rel="stylesheet" href="./styles.css?v=20261031-cloud-workflow-v1" onerror="window.__tibetanWorkbenchBootFailure()" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261030-whole-page-v2" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
+    <script src="./app.js?v=20261031-cloud-workflow-v1" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -141,10 +141,10 @@
           <p>从这里进入藏文 OCR 校对，或进入藏译中任务。项目记录保存在本机浏览器缓存中，重新加载源文件后可继续校对。</p>
         </div>
 
-        <section id="cloudLibrary" class="home-cloud-library" aria-label="云端待识别文档">
+        <section id="cloudLibrary" class="home-cloud-library" aria-label="阿里云文档">
           <div class="finder-toolbar">
             <div class="finder-window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-            <div class="finder-title"><i data-lucide="folder"></i><strong>待识别文档</strong><span id="cloudLibraryCount"></span></div>
+            <div class="finder-title"><i data-lucide="folder"></i><strong>阿里云文档</strong><span id="cloudLibraryCount"></span></div>
             <div class="finder-actions">
               <button id="cloudLibraryUploadButton" class="ghost-button compact" type="button" aria-label="上传文件" hidden><i data-lucide="upload"></i><span>上传文件</span></button>
               <input id="cloudLibraryUploadInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.docx,.md,.markdown,.txt" hidden />
@@ -164,7 +164,7 @@
               <div id="cloudLibraryStatus" class="finder-status" role="status"></div>
               <div id="cloudLibraryFiles" hidden>
                 <nav id="cloudLibraryBreadcrumb" class="finder-breadcrumb" aria-label="当前文件夹"></nav>
-                <div class="finder-columns" aria-hidden="true"><span>名称</span><span>修改日期</span><span>大小</span><span>种类</span></div>
+                <div class="finder-columns" aria-hidden="true"><span>名称</span><span>修改日期</span><span>大小</span><span>种类</span><span>打开方式</span></div>
                 <div id="cloudLibraryRows" class="finder-rows"></div>
               </div>
             </div>

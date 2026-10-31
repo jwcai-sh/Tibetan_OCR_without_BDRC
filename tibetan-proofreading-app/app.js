@@ -2044,8 +2044,8 @@ function renderCloudLibraryRows() {
     const date = updatedAt && !Number.isNaN(updatedAt.getTime())
       ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(updatedAt) : "—";
     rows.appendChild(makeCloudLibraryRow(name, "file-text", date,
-      cloudLibraryFileKind(name), () => void openCloudLibraryFile(file),
-      formatCloudLibrarySize(file.size)));
+      cloudLibraryFileKind(name), null,
+      formatCloudLibrarySize(file.size), file));
   }
   if (!folders.size && !files.length) {
     const empty = document.createElement("p");
@@ -2066,11 +2066,12 @@ function cloudLibraryFileKind(name) {
   return "文件";
 }
 
-function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—") {
-  const row = document.createElement("button");
-  row.type = "button";
+function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—", file = null) {
+  const row = document.createElement(file ? "div" : "button");
+  if (!file) row.type = "button";
   row.className = "finder-row";
-  row.addEventListener("click", onClick);
+  if (file) row.classList.add("finder-file-row");
+  else row.addEventListener("click", onClick);
   const nameCell = document.createElement("span");
   nameCell.className = "finder-row-name";
   const iconElement = document.createElement("i");
@@ -2083,6 +2084,19 @@ function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—") {
     else cell.appendChild(value);
     row.appendChild(cell);
   }
+  if (file) {
+    const actions = document.createElement("span");
+    actions.className = "finder-cell finder-row-actions";
+    for (const [workflow, label] of [["ocr", "OCR 校对"], ["translation", "藏译中"]]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.setAttribute("aria-label", `${name}：${label}`);
+      button.addEventListener("click", () => void openCloudLibraryFile(file, workflow));
+      actions.appendChild(button);
+    }
+    row.appendChild(actions);
+  }
   return row;
 }
 
@@ -2093,7 +2107,11 @@ function formatCloudLibrarySize(bytes) {
   return `${(size / 1048576).toFixed(1)} MB`;
 }
 
-async function openCloudLibraryFile(file) {
+async function openCloudLibraryFile(file, workflow) {
+  if (workflow !== "ocr" && workflow !== "translation") {
+    setCloudLibraryStatus("请选择“OCR 校对”或“藏译中”后打开文件。", true);
+    return;
+  }
   const requestId = ++state.documentRequestId;
   setCloudLibraryStatus(`正在打开“${file.path}”…`);
   try {
@@ -2109,7 +2127,7 @@ async function openCloudLibraryFile(file) {
     if (requestId !== state.documentRequestId) return;
     if (!response.ok || !book.book_id) throw new Error(book.detail || `HTTP ${response.status}`);
     setCloudLibraryStatus("");
-    if (isCloudDeployment() && isPdfFile({ name: book.name || file.name || file.path, type: book.content_type })) {
+    if (workflow === "ocr" && isCloudDeployment() && isPdfFile({ name: book.name || file.name || file.path, type: book.content_type })) {
       window.location.assign(`./whole-page-proofread.html?book_id=${encodeURIComponent(book.book_id)}&page=1`);
       return;
     }
@@ -2118,7 +2136,7 @@ async function openCloudLibraryFile(file) {
       remoteBookId: book.book_id,
       apiBaseUrl: cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin(),
       apiAccessToken: isLocalWorkbench() ? cloudLibrary.accessToken : "",
-    }, "ocr", { requestId });
+    }, workflow, { requestId });
   } catch (error) {
     if (requestId !== state.documentRequestId) return;
     setCloudLibraryStatus(`打开文档失败：${error.message || error}`, true);
