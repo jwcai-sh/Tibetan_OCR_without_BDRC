@@ -42,6 +42,15 @@ test('page and document rotation use direct buttons without a choice menu', () =
   assert.doesNotMatch(html, /rotatePageMenu|rotateDocumentMenu|rotation-menu/);
 });
 
+test('whole-book export is in the global toolbar while page save stays in its card', () => {
+  const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  const exportAt = html.indexOf('id="exportCorrected"');
+  assert.ok(exportAt > html.indexOf('<div class="toolbar">'));
+  assert.ok(exportAt < html.indexOf('<nav id="pageIndex"'));
+  assert.match(html.slice(exportAt, exportAt + 100), /导出整本正确版 TXT/);
+  assert.match(html, /<h2>人工校对正确版<\/h2><button id="saveCorrected"[^>]*>保存本页正确版<\/button>/);
+});
+
 test('batch page selection includes every page or only pages without Gemini text', () => {
   const pages = { '1': 'ཀ་', '2': '  ', '4': 'ཁ་' };
   assert.deepEqual(pagesForRecognition(4, pages, 'all'), [1, 2, 3, 4]);
