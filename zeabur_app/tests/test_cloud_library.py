@@ -191,6 +191,23 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(saved["page_models"]["1"], "gemini:gemini-3.8-flash")
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "原校对")
 
+    def test_single_openai_recognition_preserves_gemini_and_corrected_text(self):
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        main.write_json(book_id, "state.json", {"page_count": 2})
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "Gemini 原文"}})
+        main.write_json(book_id, "whole-page-proofread/1.json", {"page_num": 1, "text": "人工正确版", "saved": True})
+        endpoint = f"/api/books/{book_id}/model-results/openai/pages/1"
+        with patch.object(main, "load_ai_ocr_module", return_value=SimpleNamespace(OPENAI_REVIEW_MODEL="test-model")):
+            self.assertEqual(self.client.put(endpoint, json={"text": "错误", "model": "openai:other"}).status_code, 400)
+            response = self.client.put(endpoint, json={"text": "བོད་", "model": "openai:test-model"})
+        self.assertEqual(response.status_code, 200, response.text)
+        saved = self.client.get(f"/api/books/{book_id}/model-results/openai").json()
+        self.assertEqual(saved["pages"], {"1": "བོད་"})
+        self.assertEqual(saved["page_models"]["1"], "openai:test-model")
+        self.assertEqual(self.client.get(f"/api/books/{book_id}/model-results/gemini4").json()["pages"]["1"], "Gemini 原文")
+        self.assertEqual(self.client.get(f"/api/books/{book_id}/whole-page-proofread/1").json()["text"], "人工正确版")
+
     def test_mobile_pdf_pages_and_text_use_existing_collaboration_auth(self):
         document = fitz.open()
         document.new_page().insert_text((72, 72), "First page")

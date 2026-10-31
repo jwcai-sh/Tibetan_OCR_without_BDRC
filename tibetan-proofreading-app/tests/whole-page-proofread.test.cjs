@@ -57,6 +57,17 @@ test('Gemini panel offers model selection and current-page recognition', () => {
   assert.match(script, /model-results\/gemini4\/pages\/\$\{page\}/);
 });
 
+test('GPT candidate uses its own cloud jobs and remains separate from the Gemini baseline', () => {
+  const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  const script = readFileSync(join(__dirname, '../whole-page-proofread.js'), 'utf8');
+  assert.match(html, /id="openaiPanel"/);
+  assert.match(html, /id="recognizeOpenAIAllPages"/);
+  assert.match(html, /id="recognizeOpenAIRemainingPages"/);
+  assert.match(script, /openai-recognition-jobs/);
+  assert.match(script, /model-results\/openai\/pages\/\$\{page\}/);
+  assert.match(script, /diffSegments\(state\.pages\.gemini4/);
+});
+
 test('line breaks and spaces do not create Tibetan differences', () => {
   const pieces = diffSegments('ཀ་ ཁ་', 'ཀ་\nཁ་');
   assert.equal(pieces.map(piece => piece.text || '').join(''), 'ཀ་\nཁ་');

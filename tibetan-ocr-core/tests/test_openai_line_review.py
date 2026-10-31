@@ -16,7 +16,7 @@ def test_missing_config_never_calls_upstream():
 
 def test_openai_routes_independently_and_returns_candidate():
     with patch.object(server, 'OPENAI_REVIEW_API_KEY', 'test'), patch.object(server, 'OPENAI_REVIEW_MODEL', 'test-model'), patch.object(server, 'prepare_line_review_images') as crop, patch.object(server, 'post_json', return_value={'status':'completed','model':'test-model','output':[{'type':'message','content':[{'type':'output_text','text':'བོད་'}]}]}) as request:
-        result = server.call_openai_line_review(b'', 'test.png', {})
+        result = server.call_openai_line_review(b'image', 'test.png', {})
         assert result['text'] == 'བོད་'
         assert result['provider'] == 'openai'
         url, body, _ = request.call_args.args
@@ -26,7 +26,36 @@ def test_openai_routes_independently_and_returns_candidate():
         assert body['input'][0]['content'][1]['image_url'].endswith(',') is False
         crop.assert_not_called()
 
+def test_whole_page_recognition_uses_original_image_and_plain_text():
+    response = {'status': 'completed', 'model': 'test-model', 'output': [
+        {'type': 'message', 'content': [{'type': 'output_text', 'text': 'ཀ་\nཁ་'}]}
+    ]}
+    with patch.object(server, 'OPENAI_REVIEW_API_KEY', 'test'), \
+         patch.object(server, 'OPENAI_REVIEW_MODEL', 'test-model'), \
+         patch.object(server, 'post_json', return_value=response) as request:
+        result = server.call_openai_whole_page_recognition(b'original-png', 'page.png', 'transcribe')
+    assert result['text'] == 'ཀ་\nཁ་'
+    assert result['model'] == 'openai:test-model'
+    url, body, key = request.call_args.args
+    assert (url, key) == ('https://api.openai.com/v1/responses', 'test')
+    assert body['store'] is False
+    assert body['input'][0]['content'][0]['text'] == 'transcribe'
+    assert body['input'][0]['content'][1]['image_url'].startswith('data:image/png;base64,')
+
+def test_whole_page_recognition_rejects_incomplete_response():
+    with patch.object(server, 'OPENAI_REVIEW_API_KEY', 'test'), \
+         patch.object(server, 'OPENAI_REVIEW_MODEL', 'test-model'), \
+         patch.object(server, 'post_json', return_value={'status': 'incomplete', 'output': []}):
+        try:
+            server.call_openai_whole_page_recognition(b'image', 'page.png', 'transcribe')
+        except RuntimeError as error:
+            assert '未返回完整' in str(error)
+        else:
+            raise AssertionError('incomplete output must not be saved')
+
 if __name__ == '__main__':
     test_missing_config_never_calls_upstream()
     test_openai_routes_independently_and_returns_candidate()
+    test_whole_page_recognition_uses_original_image_and_plain_text()
+    test_whole_page_recognition_rejects_incomplete_response()
     print('OpenAI routing/configuration tests passed')

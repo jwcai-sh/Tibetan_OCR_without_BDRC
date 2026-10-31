@@ -70,6 +70,19 @@ class LineReviewJobsTest(unittest.TestCase):
         recognize.assert_called_once_with('c' * 32, 1, 'gemini-3.8-flash')
         self.assertEqual(self.client.get('/api/line-review/jobs/' + job_id).json()['result']['text'], 'བོད་')
 
+    def test_whole_page_openai_job_uses_server_model_and_existing_polling(self):
+        self.module.OPENAI_REVIEW_API_KEY = 'test'
+        self.module.OPENAI_REVIEW_MODEL = 'test-model'
+        with patch.object(main, 'whole_page_book_count', return_value=2), \
+             patch.object(main, 'run_cloud_openai_page_recognition', return_value={
+                 'text': 'བོད་', 'model': 'openai:test-model'}) as recognize:
+            response = self.client.post('/api/books/' + 'c' * 32 + '/openai-recognition-jobs', json={'page_num': 1})
+            self.assertEqual(response.status_code, 202)
+            job_id = response.json()['job_id']
+            main.line_review_jobs[job_id][0].result(2)
+        recognize.assert_called_once_with('c' * 32, 1)
+        self.assertEqual(self.client.get('/api/line-review/jobs/' + job_id).json()['result']['model'], 'openai:test-model')
+
     def test_cloud_original_renders_in_worker_without_upload(self):
         render_started = threading.Event()
         render_release = threading.Event()

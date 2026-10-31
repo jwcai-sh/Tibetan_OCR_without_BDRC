@@ -1839,6 +1839,25 @@ def call_openai_page_review(image_bytes: bytes, filename: str, rows: list) -> di
             "recognition_scope": "whole-page"}
 
 
+def call_openai_whole_page_recognition(image_bytes: bytes, filename: str, prompt: str) -> dict[str, str]:
+    """Transcribe the whole original page using the server-side OpenAI credential."""
+    if not OPENAI_REVIEW_API_KEY or not OPENAI_REVIEW_MODEL:
+        raise RuntimeError("OpenAI 整页识别未配置：请在 Zeabur 设置 OPENAI_API_KEY 和 OPENAI_REVIEW_MODEL。")
+    raw = post_json("https://api.openai.com/v1/responses", {
+        "model": OPENAI_REVIEW_MODEL, "store": False, "max_output_tokens": MAX_TOKENS,
+        "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": prompt},
+            {"type": "input_image", "image_url": image_data_url(image_bytes, filename), "detail": "high"},
+        ]}],
+    }, OPENAI_REVIEW_API_KEY, timeout=GEMINI_OCR_TIMEOUT)
+    text = "".join(part.get("text", "") for item in raw.get("output", [])
+                   if item.get("type") == "message" for part in item.get("content", [])
+                   if part.get("type") == "output_text").strip()
+    if not text or raw.get("status") == "incomplete":
+        raise RuntimeError("OpenAI 未返回完整的整页转录，原识别结果保留，请重试。")
+    return {"text": text, "model": f"openai:{OPENAI_REVIEW_MODEL}"}
+
+
 def call_openai_line_review(image_bytes: bytes, filename: str, bbox: dict[str, float]) -> dict[str, Any]:
     """Use the official OpenAI API independently of the existing AI provider."""
     if not OPENAI_REVIEW_API_KEY or not OPENAI_REVIEW_MODEL:
@@ -2011,6 +2030,7 @@ def call_qwen_page_review(image_bytes: bytes, filename: str, rows: list, model: 
 
 def review_models_payload() -> dict[str, Any]:
     return {"qwen": {"models": QWEN_REVIEW_MODELS, "configured": bool(QWEN_REVIEW_API_KEY and QWEN_REVIEW_BASE_URL)},
+            "openai": {"model": OPENAI_REVIEW_MODEL, "configured": bool(OPENAI_REVIEW_API_KEY and OPENAI_REVIEW_MODEL)},
             "gemini": {"models": GEMINI_REVIEW_MODELS, "configured": USE_MODEL_AGGREGATOR or bool(API_KEY and BASE_URL),
                        "billing_note": "免费层级与剩余额度请以 AI Studio 为准；模型列表不代表额度承诺。"}}
 

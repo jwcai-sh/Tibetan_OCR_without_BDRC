@@ -1,8 +1,8 @@
 (function (root) {
   'use strict';
 
-  const MODEL_KEYS = ['gemini4', 'teacher', 'yigdzin1'];
-  const MODEL_LABELS = { gemini4: 'Gemini 4', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
+  const MODEL_KEYS = ['gemini4', 'openai', 'teacher', 'yigdzin1'];
+  const MODEL_LABELS = { gemini4: 'Gemini 4', openai: 'GPT（OpenAI API）', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
 
   function parsePageTextFile(source, pageCount) {
     const text = String(source || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
@@ -113,7 +113,7 @@
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
   $('topImportControls').hidden = Boolean(bookId);
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchStop: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
   const rotationKey = scope => `whole-page-preview-rotation-v2:${bookId}:${scope}`;
@@ -169,6 +169,7 @@
     const container = $(`${key}Text`);
     container.replaceChildren();
     if (key === 'gemini4') $('geminiModelLabel').textContent = `${geminiLabel()} · 差异基准`;
+    if (key === 'openai') $('openaiModelLabel').textContent = `GPT（${String(state.openaiPageModels[String(state.page)] || state.openaiModel || 'OpenAI API').replace(/^openai:/, '')}）`;
     const text = state.pages[key]?.[String(state.page)] || '';
     if (!text) {
       container.textContent = key === 'yigdzin1' ? '本页无藏文识别结果。' : '本页尚无识别结果。';
@@ -217,6 +218,7 @@
     state.page = page;
     const token = ++state.pageRequest;
     $('geminiRecognitionFeedback').textContent = '';
+    $('openaiRecognitionFeedback').textContent = state.openaiConfigured ? '' : '服务端尚未配置 OpenAI API key 和模型；请在 Zeabur 服务环境变量中设置 OPENAI_API_KEY、OPENAI_REVIEW_MODEL。';
     const pageModel = String(state.pageModels[String(page)] || '').replace(/^gemini:/, '');
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
@@ -238,7 +240,12 @@
     $('recognizeGemini').disabled = !available || busy;
     $('recognizeAllPages').disabled = !available || busy;
     $('recognizeRemainingPages').disabled = !available || busy || !pagesForRecognition(state.count, state.pages.gemini4, 'remaining').length;
-    $('stopBatchRecognition').hidden = !state.batchRecognizing;
+    $('stopBatchRecognition').hidden = !state.batchRecognizing || state.batchProvider !== 'gemini';
+    const openaiAvailable = Boolean(bookId && state.count && state.openaiConfigured);
+    $('recognizeOpenAI').disabled = !openaiAvailable || busy;
+    $('recognizeOpenAIAllPages').disabled = !openaiAvailable || busy;
+    $('recognizeOpenAIRemainingPages').disabled = !openaiAvailable || busy || !pagesForRecognition(state.count, state.pages.openai, 'remaining').length;
+    $('stopOpenAIBatchRecognition').hidden = !state.batchRecognizing || state.batchProvider !== 'openai';
   }
 
   async function recognizeGeminiResult(page, model) {
@@ -291,6 +298,7 @@
     if (!pages.length) { feedback('所有页面已有 Gemini 识别结果。'); return; }
     const model = $('geminiRecognitionModel').value;
     state.batchRecognizing = true;
+    state.batchProvider = 'gemini';
     state.batchStop = false;
     updateRecognitionControls();
     $('geminiRecognitionFeedback').textContent = '';
@@ -301,10 +309,79 @@
       });
     for (const page of failed) console.error(`第 ${page} 页识别失败`, errors.get(page));
     state.batchRecognizing = false;
+    state.batchProvider = '';
     state.batchStop = false;
     updateRecognitionControls();
     const summary = `批量识别${stopped ? '已停止' : '已结束'}：成功 ${completed}/${pages.length} 页${failed.length ? `；重试后仍失败：第 ${failed.join('、')} 页` : ''}。已保存的正确版未修改。`;
     $('geminiRecognitionFeedback').textContent = failed.length ? summary : '';
+    feedback(summary, Boolean(failed.length));
+  }
+
+  async function recognizeOpenAIResult(page) {
+    const job = await requestJson(endpoint('/openai-recognition-jobs'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_num: page }),
+    });
+    if (!/^[a-f0-9]{32}$/.test(job.job_id || '')) throw new Error('识别任务编号无效');
+    let result = null;
+    for (let attempt = 0; attempt < 360; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const progress = await requestJson(`/api/line-review/jobs/${job.job_id}`);
+      if (progress.status === 'failed') throw new Error(progress.error || '模型识别失败');
+      if (progress.status === 'completed') { result = progress.result; break; }
+    }
+    if (!result) throw new Error('识别等待超时，请稍后重试');
+    if (result.model !== `openai:${state.openaiModel}` || !result.text?.trim()) throw new Error('模型身份或识别文本无效，原结果保留');
+    const saved = await requestJson(endpoint(`/model-results/openai/pages/${page}`), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: result.text, model: result.model }),
+    });
+    state.pages.openai[String(page)] = saved.text;
+    state.openaiPageModels[String(page)] = saved.model;
+    if (state.page === page) renderCandidate('openai');
+    updateRecognitionControls();
+    return saved;
+  }
+
+  async function recognizeOpenAIPage() {
+    if (!state.openaiConfigured || !state.count || state.recognizing || state.batchRecognizing) return;
+    const page = state.page;
+    state.recognizing = true;
+    updateRecognitionControls();
+    $('openaiRecognitionFeedback').textContent = '';
+    feedback(`第 ${page} 页正在用 GPT（${state.openaiModel}）识别…`);
+    try {
+      await recognizeOpenAIResult(page);
+      feedback(`第 ${page} 页 GPT 识别结果已保存到云端；人工正确版仍需单独保存。`);
+    } catch (error) {
+      const message = `第 ${page} 页 GPT 识别失败：${error.message}；原结果保留。`;
+      $('openaiRecognitionFeedback').textContent = message;
+      feedback(message, true);
+    } finally {
+      state.recognizing = false;
+      updateRecognitionControls();
+    }
+  }
+
+  async function recognizeOpenAIBatch(mode) {
+    if (!state.openaiConfigured || !state.count || state.recognizing || state.batchRecognizing) return;
+    const pages = pagesForRecognition(state.count, state.pages.openai, mode);
+    if (!pages.length) { feedback('所有页面已有 GPT 识别结果。'); return; }
+    state.batchRecognizing = true;
+    state.batchProvider = 'openai';
+    state.batchStop = false;
+    updateRecognitionControls();
+    $('openaiRecognitionFeedback').textContent = '';
+    const { completed, failed, errors, stopped } = await recognizeWithRetries(pages,
+      page => recognizeOpenAIResult(page), {
+        shouldStop: () => state.batchStop,
+        onAttempt: (page, round, done, total) => feedback(`GPT 批量识别 ${done + 1}/${total}：第 ${page} 页（第 ${round}/3 次）…`),
+      });
+    for (const page of failed) console.error(`第 ${page} 页 GPT 识别失败`, errors.get(page));
+    state.batchRecognizing = false;
+    state.batchProvider = '';
+    state.batchStop = false;
+    updateRecognitionControls();
+    const summary = `GPT 批量识别${stopped ? '已停止' : '已结束'}：成功 ${completed}/${pages.length} 页${failed.length ? `；重试后仍失败：第 ${failed.join('、')} 页` : ''}。人工正确版未修改。`;
+    $('openaiRecognitionFeedback').textContent = failed.length ? summary : '';
     feedback(summary, Boolean(failed.length));
   }
 
@@ -378,6 +455,13 @@
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
   $('saveCorrected').addEventListener('click', () => void saveCorrected());
   $('recognizeGemini').addEventListener('click', () => void recognizeGeminiPage());
+  $('recognizeOpenAI').addEventListener('click', () => void recognizeOpenAIPage());
+  $('recognizeOpenAIAllPages').addEventListener('click', () => void recognizeOpenAIBatch('all'));
+  $('recognizeOpenAIRemainingPages').addEventListener('click', () => void recognizeOpenAIBatch('remaining'));
+  $('stopOpenAIBatchRecognition').addEventListener('click', () => {
+    state.batchStop = true;
+    feedback('批量识别将在当前页完成后停止。');
+  });
   $('recognizeAllPages').addEventListener('click', () => void recognizeBatch('all'));
   $('recognizeRemainingPages').addEventListener('click', () => void recognizeBatch('remaining'));
   $('stopBatchRecognition').addEventListener('click', () => {
@@ -403,7 +487,7 @@
     event.target.value = '';
     if (file) await importSource(file);
   });
-  for (const key of MODEL_KEYS) {
+  for (const key of MODEL_KEYS.filter(key => key !== 'openai')) {
     $(`${key}Import`).addEventListener('change', async event => {
       const file = event.target.files?.[0];
       event.target.value = '';
@@ -455,6 +539,8 @@
         $('pageIndex').appendChild(button);
       }
       const catalog = await requestJson('/api/review-models').catch(() => null);
+      state.openaiModel = String(catalog?.openai?.model || '');
+      state.openaiConfigured = Boolean(catalog?.openai?.configured && state.openaiModel);
       const allowed = catalog?.gemini?.models;
       if (Array.isArray(allowed)) {
         for (const option of $('geminiRecognitionModel').options) option.disabled = !allowed.includes(option.value);
@@ -468,6 +554,7 @@
       }));
       state.pages = Object.fromEntries(models.map(([key, result]) => [key, result.pages || {}]));
       state.pageModels = models.find(([key]) => key === 'gemini4')?.[1]?.page_models || {};
+      state.openaiPageModels = models.find(([key]) => key === 'openai')?.[1]?.page_models || {};
       updateRecognitionControls();
       await loadPage(Math.min(state.count, state.page));
     } catch (error) { feedback(`整页校对加载失败：${error.message}`, true); }
