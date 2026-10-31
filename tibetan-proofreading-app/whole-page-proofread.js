@@ -407,18 +407,16 @@
   });
   $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
   $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
-  for (const button of root.document.querySelectorAll('[data-rotation-scope]')) {
+  for (const [scope, buttonId] of [['page', 'rotatePage'], ['document', 'rotateDocument']]) {
+    const button = $(buttonId);
     button.addEventListener('click', () => {
-      const scope = button.dataset.rotationScope;
-      const degrees = button.dataset.rotationDegrees === 'reset' ? null : Number(button.dataset.rotationDegrees);
       if (scope === 'document') {
-        state.documentRotation = degrees === null ? 0 : normalizeRotation(state.documentRotation + degrees);
+        state.documentRotation = normalizeRotation(state.documentRotation + 90);
         try { root.localStorage.setItem(rotationKey('document'), String(state.documentRotation)); } catch { /* Session setting still works. */ }
       } else {
-        state.pageRotations[state.page] = degrees === null ? 0 : normalizeRotation(pageRotation(state.page) + degrees);
+        state.pageRotations[state.page] = normalizeRotation(pageRotation(state.page) + 90);
         try { root.localStorage.setItem(rotationKey(`page:${state.page}`), String(state.pageRotations[state.page])); } catch { /* Session setting still works. */ }
       }
-      $(scope === 'document' ? 'rotateDocumentMenu' : 'rotatePageMenu').open = false;
       renderPagePreview();
     });
   }

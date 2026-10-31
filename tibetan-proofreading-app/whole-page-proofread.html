@@ -36,14 +36,9 @@
     .heading button:first-of-type { margin-left: auto; }
     .preview-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
     .heading .preview-tools button { margin-left: 0; }
-    .rotation-control { position: relative; }
-    .rotation-control summary { display: inline-flex; align-items: center; gap: 5px; min-height: 35px; padding: 6px 9px; border: 1px solid #a7b9ca; border-radius: 7px; color: #254660; cursor: pointer; list-style: none; font-size: 13px; white-space: nowrap; }
-    .rotation-control summary::-webkit-details-marker { display: none; }
-    .rotation-control summary:hover, .rotation-control[open] summary { background: #edf5fb; }
-    .rotation-control summary svg { width: 19px; height: 19px; flex: none; }
-    .rotation-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 5; display: grid; gap: 2px; min-width: 165px; padding: 5px; border: 1px solid #b9cad9; border-radius: 7px; background: white; box-shadow: 0 6px 18px #18334b25; }
-    .rotation-menu button { width: 100%; padding: 8px 10px; border: 0; text-align: left; font-size: 13px; white-space: nowrap; }
-    .rotation-menu button:hover { background: #edf5fb; }
+    .rotation-button { display: inline-flex; align-items: center; gap: 5px; min-height: 35px; font-size: 13px; white-space: nowrap; }
+    .rotation-button:hover { background: #edf5fb; }
+    .rotation-button svg { width: 19px; height: 19px; flex: none; }
     #previewRotationStatus { color: #526474; font-size: 12px; white-space: nowrap; }
     .model-panel summary { display: inline-flex; align-items: center; gap: 10px; list-style: none; cursor: pointer; font-size: 17px; font-weight: 700; vertical-align: middle; }
     .model-panel summary::-webkit-details-marker { display: none; }
@@ -95,12 +90,20 @@
   </div>
   <nav id="pageIndex" aria-label="选择 PDF 页码"></nav>
   <main>
-    <section><div class="heading"><h2>原图</h2><div class="preview-tools"><span id="previewRotationStatus" aria-live="polite"></span><details id="rotatePageMenu" class="rotation-control"><summary aria-label="旋转本页原图" title="旋转本页原图"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h13v11H4zM15 3a5 5 0 0 1 5 5v3m0-3-2-2m2 2 2-2"/></svg>本页</summary><div class="rotation-menu"><button type="button" data-rotation-scope="page" data-rotation-degrees="90">顺时针旋转 90°</button><button type="button" data-rotation-scope="page" data-rotation-degrees="180">旋转 180°</button><button type="button" data-rotation-scope="page" data-rotation-degrees="270">逆时针旋转 90°</button><button type="button" data-rotation-scope="page" data-rotation-degrees="reset">恢复本页默认方向</button></div></details><details id="rotateDocumentMenu" class="rotation-control"><summary aria-label="旋转整本文档原图" title="旋转整本文档原图；仅在本浏览器保存"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h13v11H4zM15 3a5 5 0 0 1 5 5v3m0-3-2-2m2 2 2-2"/></svg>整本</summary><div class="rotation-menu"><button type="button" data-rotation-scope="document" data-rotation-degrees="90">整本顺时针 90°</button><button type="button" data-rotation-scope="document" data-rotation-degrees="180">整本旋转 180°</button><button type="button" data-rotation-scope="document" data-rotation-degrees="270">整本逆时针 90°</button><button type="button" data-rotation-scope="document" data-rotation-degrees="reset">恢复整本默认方向</button></div></details><button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button></div></div><div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div></section>
+    <section>
+      <div class="heading"><h2>原图</h2><div class="preview-tools">
+        <span id="previewRotationStatus" aria-live="polite"></span>
+        <button id="rotatePage" class="rotation-button" type="button" aria-label="本页顺时针旋转 90 度" title="点击一次，本页顺时针旋转 90°；连续点击可旋转 180°、270°并复位"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h13v11H4zM15 3a5 5 0 0 1 5 5v3m0-3-2-2m2 2 2-2"/></svg>本页</button>
+        <button id="rotateDocument" class="rotation-button" type="button" aria-label="整本顺时针旋转 90 度" title="点击一次，整本顺时针旋转 90°；连续点击可旋转 180°、270°并复位，仅在本浏览器保存"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h13v11H4zM15 3a5 5 0 0 1 5 5v3m0-3-2-2m2 2 2-2"/></svg>整本</button>
+        <button id="zoomOut" type="button" aria-label="缩小原图">−</button><button id="zoomIn" type="button" aria-label="放大原图">＋</button>
+      </div></div>
+      <div class="image-viewport"><img id="pageScan" alt="原始 PDF 页面" /></div>
+    </section>
     <details id="gemini4Panel" class="model-panel" open><summary><span id="geminiModelLabel">Gemini 4 · 差异基准</span></summary><div class="model-actions"><select id="geminiRecognitionModel" aria-label="Gemini 识别模型"><option value="gemini-4-argon">Gemini 4 Argon</option><option value="gemini-3.8-flash">Gemini 3.8 Flash</option><option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select><button id="recognizeGemini" type="button" disabled>识别当前页</button><button id="recognizeAllPages" type="button" disabled>识别所有页</button><button id="recognizeRemainingPages" type="button" disabled>识别剩余页</button><button id="stopBatchRecognition" type="button" title="当前页完成后停止" hidden>停止批量</button><button id="copyGemini" type="button">填入正确版</button></div><p id="geminiRecognitionFeedback" role="alert"></p><div id="gemini4Text" class="model-text"></div></details>
     <details class="model-panel" open><summary>教师校正稿</summary><label class="model-import">导入教师校正稿 TXT（按页分隔）<input id="teacherImport" type="file" accept=".txt,text/plain" /></label><div id="teacherText" class="model-text"></div></details>
     <details class="model-panel" open><summary>Yigdzin1</summary><label class="model-import">导入 Yigdzin1 TXT（按页分隔）<input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label><div id="yigdzin1Text" class="model-text"></div></details>
     <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261030-v11" defer></script>
+  <script src="./whole-page-proofread.js?v=20261031-v12" defer></script>
 </body>
 </html>
