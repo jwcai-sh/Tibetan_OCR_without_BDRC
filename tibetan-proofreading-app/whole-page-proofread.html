@@ -103,8 +103,8 @@
     <details id="openaiPanel" class="model-panel" open><summary><span id="openaiModelLabel">GPT（OpenAI API）</span></summary><div class="model-actions"><button id="recognizeOpenAI" type="button" disabled>识别当前页</button><button id="recognizeOpenAIAllPages" type="button" disabled>识别所有页</button><button id="recognizeOpenAIRemainingPages" type="button" disabled>识别剩余页</button><button id="stopOpenAIBatchRecognition" type="button" title="当前页完成后停止" hidden>停止批量</button></div><p id="openaiRecognitionFeedback" role="alert"></p><div id="openaiText" class="model-text"></div></details>
     <details class="model-panel" open><summary>教师校正稿</summary><label class="model-import">导入教师校正稿 TXT（按页分隔）<input id="teacherImport" type="file" accept=".txt,text/plain" /></label><div id="teacherText" class="model-text"></div></details>
     <details class="model-panel" open><summary>Yigdzin1</summary><label class="model-import">导入 Yigdzin1 TXT（按页分隔）<input id="yigdzin1Import" type="file" accept=".txt,text/plain" /></label><div id="yigdzin1Text" class="model-text"></div></details>
-    <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button></div><p class="hint">黄色表示候选比 Gemini 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
+    <section><div class="heading"><h2>人工校对正确版</h2><button id="saveCorrected" type="button">保存正确版</button><button id="exportCorrected" type="button" disabled>导出正确版 TXT</button></div><p class="hint">黄色表示候选比 Gemini 多识或写法不同；橙色短线表示候选漏识。空格与换行不参与差异计算。正确版独立保存到云端；全部页面保存后可导出到本地。</p><textarea id="correctedText" aria-label="当前页人工校对正确版"></textarea></section>
   </main>
-  <script src="./whole-page-proofread.js?v=20261031-v14" defer></script>
+  <script src="./whole-page-proofread.js?v=20261031-v15" defer></script>
 </body>
 </html>

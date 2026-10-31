@@ -17,6 +17,17 @@
     return pages;
   }
 
+  function buildCorrectedExport(results, pageCount) {
+    const pages = new Map(results.map(result => [Number(result.page_num), result]));
+    const missing = Array.from({ length: pageCount }, (_, index) => index + 1)
+      .filter(page => !pages.get(page)?.saved);
+    if (missing.length) throw new Error(`第 ${missing.join('、')} 页尚未保存正确版；请先保存后导出。`);
+    return Array.from({ length: pageCount }, (_, index) => {
+      const page = index + 1;
+      return `第 ${page} 页\n${String(pages.get(page).text || '').replace(/\r\n?/g, '\n')}`;
+    }).join('\n\n') + '\n';
+  }
+
   function graphemes(text) {
     if (typeof Intl.Segmenter === 'function') {
       return [...new Intl.Segmenter('bo', { granularity: 'grapheme' }).segment(text)].map(part => part.segment);
@@ -106,14 +117,14 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
   $('topImportControls').hidden = Boolean(bookId);
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, dirty: false, saving: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
   const rotationKey = scope => `whole-page-preview-rotation-v2:${bookId}:${scope}`;
@@ -407,6 +418,36 @@
     } finally { state.saving = false; $('correctedText').readOnly = false; $('saveCorrected').disabled = !state.dirty; }
   }
 
+  async function exportCorrected() {
+    if (state.exporting || state.saving) return;
+    if (!bookId || !state.count) { feedback('请先打开一个 PDF 项目。', true); return; }
+    state.exporting = true;
+    $('exportCorrected').disabled = true;
+    try {
+      if (!(await saveCorrected())) return;
+      const results = [];
+      for (let first = 1; first <= state.count; first += 4) {
+        feedback(`正在读取正确版：第 ${first}–${Math.min(first + 3, state.count)} 页 / 共 ${state.count} 页…`);
+        const batch = await Promise.all(Array.from({ length: Math.min(4, state.count - first + 1) }, (_, index) =>
+          requestJson(endpoint(`/whole-page-proofread/${first + index}`))));
+        results.push(...batch);
+      }
+      const content = buildCorrectedExport(results, state.count);
+      const baseName = String(state.sourceName || '藏文文档').split(/[\\/]/).pop().replace(/\.[^.]+$/, '')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || '藏文文档';
+      const url = root.URL.createObjectURL(new Blob(['\uFEFF', content], { type: 'text/plain;charset=utf-8' }));
+      const link = root.document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}_人工校对正确版.txt`;
+      root.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      root.setTimeout(() => root.URL.revokeObjectURL(url), 2000);
+      feedback(`已下载 ${state.count} 页正确版 TXT：${link.download}`);
+    } catch (error) { feedback(`正确版导出失败：${error.message}`, true); }
+    finally { state.exporting = false; $('exportCorrected').disabled = !state.count; }
+  }
+
   async function goToPage(page) {
     if (!Number.isInteger(page) || page < 1 || page > state.count) return;
     if (page === state.page) return;
@@ -454,6 +495,7 @@
   $('next').addEventListener('click', () => void goToPage(state.page + 1));
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
   $('saveCorrected').addEventListener('click', () => void saveCorrected());
+  $('exportCorrected').addEventListener('click', () => void exportCorrected());
   $('recognizeGemini').addEventListener('click', () => void recognizeGeminiPage());
   $('recognizeOpenAI').addEventListener('click', () => void recognizeOpenAIPage());
   $('recognizeOpenAIAllPages').addEventListener('click', () => void recognizeOpenAIBatch('all'));
@@ -528,6 +570,7 @@
       const info = await requestJson(endpoint('/document-info'));
       state.count = Number(info.page_count) || 0;
       if (!state.count) throw new Error('书籍没有可预览的 PDF 页面');
+      $('exportCorrected').disabled = false;
       state.sourceName = info.name || '';
       state.documentRotation = storedRotation('document');
       $('bookName').textContent = info.name || '藏文典籍';

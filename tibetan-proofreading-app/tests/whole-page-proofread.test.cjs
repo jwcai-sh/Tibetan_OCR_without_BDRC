@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
 
 test('batch retries only failed pages and leaves successful pages untouched', async () => {
   const attempts = [];
@@ -85,4 +85,20 @@ test('rejects missing page headings and keeps a deliberately empty page', () => 
   const parsed = parsePageTextFile('第 1 页\nཀ་\n\n第 2 页\n', 2);
   assert.deepEqual(parsed, { '1': 'ཀ་', '2': '' });
   assert.throws(() => parsePageTextFile('第 1 页\nཀ་', 2), /2 页/);
+});
+
+test('corrected export retains Tibetan line breaks and orders pages numerically', () => {
+  const content = buildCorrectedExport([
+    { page_num: 2, saved: true, text: 'ག་\r\nང་' },
+    { page_num: 1, saved: true, text: 'ཀ་\nཁ་' },
+  ], 2);
+  assert.deepEqual(parsePageTextFile(content, 2), { '1': 'ཀ་\nཁ་', '2': 'ག་\nང་' });
+  assert.match(content, /^第 1 页\nཀ་\nཁ་\n\n第 2 页\nག་\nང་\n$/);
+});
+
+test('corrected export refuses to silently omit an unsaved page', () => {
+  assert.throws(() => buildCorrectedExport([
+    { page_num: 1, saved: true, text: 'ཀ་' },
+    { page_num: 2, saved: false, text: '' },
+  ], 3), /第 2、3 页尚未保存/);
 });
