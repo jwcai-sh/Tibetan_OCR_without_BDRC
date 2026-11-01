@@ -44,11 +44,11 @@
       };
       window.setTimeout(window.__tibetanWorkbenchBootFailure, 90000);
     </script>
-    <link rel="stylesheet" href="./styles.css?v=20261101-tb-integrated" onerror="window.__tibetanWorkbenchBootFailure()" />
+    <link rel="stylesheet" href="./styles.css?v=20261101-tb-default" onerror="window.__tibetanWorkbenchBootFailure()" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
     <script src="./app.js?v=20261031-cloud-workflow-v1" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
-    <script src="./tb-translation-entry.js?v=20261101-tb-integrated" defer></script>
+    <script src="./tb-translation-entry.js?v=20261101-tb-default" defer></script>
   </head>
   <body>
     <main class="app-shell ocr-only-mode ai-only-mode">
@@ -68,7 +68,6 @@
             <button id="collabHeaderLogout" class="ghost-button compact" type="button" hidden>退出</button>
             <button id="collaborationRetryButton" class="ghost-button compact" type="button" hidden>重试连接</button>
           </div>
-          <a id="tbTranslationLink" class="primary-button compact tb-translation-entry" href="./tb-translation.html" aria-controls="tbTranslationView" aria-expanded="false">TB 段落对照</a>
           <button id="homeButton" class="ghost-button compact workbench-only-action" type="button">
             <i data-lucide="layout-dashboard"></i>
             <span>主页</span>

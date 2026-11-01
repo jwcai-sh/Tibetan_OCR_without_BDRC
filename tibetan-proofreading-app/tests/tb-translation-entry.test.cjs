@@ -8,7 +8,7 @@ const script = fs.readFileSync(path.join(__dirname, '../tb-translation-entry.js'
 const bookId = '1de68f20c97f46a6a645c6a8f05cbc7f';
 
 function start(search = `?workflow=translation&book_id=${bookId}`) {
-  let current = new URL(`https://example.test/tibetan-proofreading-app/${search}`);
+  const current = new URL(`https://example.test/tibetan-proofreading-app/${search}`);
   const routeEvents = {};
   const attributes = new Map();
   const classes = new Set(['workbench-mode', 'translation-workflow']);
@@ -22,72 +22,56 @@ function start(search = `?workflow=translation&book_id=${bookId}`) {
       },
     },
   };
-  const link = {
-    addEventListener: (name, callback) => { routeEvents[name] = callback; },
-    setAttribute: (name, value) => attributes.set(name, value),
-  };
   const workbench = { hidden: false };
   const tbView = { hidden: true };
   const frame = {
     getAttribute: (name) => attributes.get(`frame:${name}`),
     setAttribute: (name, value) => attributes.set(`frame:${name}`, value),
   };
-  const elements = { tbTranslationLink: link, workbenchView: workbench, tbTranslationView: tbView, tbTranslationFrame: frame };
+  const elements = { workbenchView: workbench, tbTranslationView: tbView, tbTranslationFrame: frame };
   const location = {
     get href() { return current.href; },
     get search() { return current.search; },
     get pathname() { return current.pathname; },
     get hash() { return current.hash; },
   };
-  const history = {
-    state: null,
-    pushState(_state, _title, next) { current = new URL(next, current); },
-    replaceState(_state, _title, next) { current = new URL(next, current); },
-  };
   const context = {
     URL,
     URLSearchParams,
     location,
-    history,
     document: { querySelector: () => shell, getElementById: (id) => elements[id] },
     window: { addEventListener: (name, callback) => { routeEvents[name] = callback; } },
     MutationObserver: class { constructor(callback) { mutationCallback = callback; } observe() {} },
   };
   vm.runInNewContext(script, context);
   return {
-    shell, classes, link, workbench, tbView, frame, attributes, location,
-    click() { routeEvents.click({ preventDefault() {} }); },
+    shell, classes, workbench, tbView, frame, location,
     popstate() { routeEvents.popstate(); },
     mutate() { mutationCallback(); },
   };
 }
 
-test('TB comparison opens inside the translation workbench and preserves its book ID', () => {
+test('translation workflow opens TB comparison directly and preserves its book ID', () => {
   const page = start();
-  assert.equal(page.tbView.hidden, true);
-  page.click();
-  assert.equal(page.location.search.includes('view=tb'), true);
   assert.equal(page.workbench.hidden, true);
   assert.equal(page.tbView.hidden, false);
   assert.equal(page.frame.getAttribute('src'), `/tibetan-proofreading-app/tb-translation.html?book_id=${bookId}&embedded=1`);
-  assert.equal(page.link.textContent, '返回逐页翻译');
-  assert.equal(page.attributes.get('aria-expanded'), 'true');
   page.workbench.hidden = false;
   page.mutate();
   assert.equal(page.workbench.hidden, true);
-  page.click();
-  assert.equal(page.location.search.includes('view=tb'), false);
-  assert.equal(page.workbench.hidden, false);
-  assert.equal(page.tbView.hidden, true);
-  assert.equal(page.frame.getAttribute('src').includes(bookId), true);
 });
 
-test('a direct TB view route opens embedded and going home clears the TB route', () => {
+test('older view=tb links still open TB and OCR keeps its own workbench', () => {
   const page = start(`?workflow=translation&book_id=${bookId}&view=tb`);
   assert.equal(page.tbView.hidden, false);
   page.classes.delete('translation-workflow');
-  page.classes.add('home-mode');
   page.mutate();
   assert.equal(page.tbView.hidden, true);
-  assert.equal(page.location.search.includes('view=tb'), false);
+  assert.equal(page.workbench.hidden, false);
+});
+
+test('the TB comparison retains the Gemini model selector', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../tb-translation.html'), 'utf8');
+  assert.match(html, /<select id="modelAInput" aria-label="Gemini 翻译模型">/);
+  assert.match(html, /<option value="gemini:gemini-3\.8-flash">/);
 });

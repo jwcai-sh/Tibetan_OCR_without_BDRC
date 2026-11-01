@@ -62,15 +62,6 @@ button {
   overflow: hidden;
 }
 
-.app-shell .project-actions .tb-translation-entry {
-  display: none;
-  text-decoration: none;
-}
-
-.app-shell.translation-workflow .project-actions .tb-translation-entry {
-  display: inline-flex;
-}
-
 .app-shell.workbench-mode .tb-workspace-view {
   grid-row: 4;
   min-height: 0;
@@ -86,11 +77,6 @@ button {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-}
-
-.app-shell.tb-translation-mode .project-actions .tb-translation-entry {
-  background: var(--surface);
-  color: var(--green-deep);
 }
 
 @media (max-width: 950px) {
