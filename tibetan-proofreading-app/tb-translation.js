@@ -288,10 +288,11 @@
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       if (response.status === 202 && data.status_url) {
         if (!/^\/api\/translate\/jobs\/[0-9a-f]{32}$/.test(data.status_url)) throw new Error('翻译任务地址无效');
+        const jobUrl = data.status_url;
         while (true) {
           if (controller.signal.aborted) throw new Error('已停止翻译');
           await new Promise((resolve) => setTimeout(resolve, 1200));
-          const progress = await fetch(data.status_url, { credentials: 'same-origin', signal: controller.signal });
+          const progress = await fetch(jobUrl, { credentials: 'same-origin', signal: controller.signal });
           data = await progress.json().catch(() => ({}));
           if (!progress.ok) throw new Error(data.detail || data.error || `翻译任务 HTTP ${progress.status}`);
           if (data.status !== 'running' && data.status !== 'queued') break;
