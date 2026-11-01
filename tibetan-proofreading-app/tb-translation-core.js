@@ -49,6 +49,19 @@
     return rows.slice(start, start + size);
   }
 
+  function calculateModelProgress(rows, completedIds, size = 15) {
+    const completed = completedIds instanceof Set ? completedIds : new Set(completedIds || []);
+    const pages = [];
+    let completedSegments = 0;
+    for (let start = 0; start < rows.length; start += size) {
+      const pageRows = rows.slice(start, start + size);
+      const count = pageRows.filter((row) => completed.has(row.id)).length;
+      completedSegments += count;
+      pages.push({ page: pages.length + 1, completed: count, total: pageRows.length });
+    }
+    return { completedSegments, completedPages: pages.filter((page) => page.completed === page.total).length, pages };
+  }
+
   function parseReferenceDocument(text, rows) {
     const allowed = new Set(rows.map((row) => row.id));
     const entries = {};
@@ -167,5 +180,5 @@
     return completed;
   }
 
-  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, selectModelBatchRows, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
+  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, calculateModelProgress, buildTranslationRequest, buildAggregatorRequest, modelsMatch, selectModelBatchRows, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
 });

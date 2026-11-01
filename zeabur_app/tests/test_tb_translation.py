@@ -71,6 +71,25 @@ class TbTranslationTest(unittest.TestCase):
         self.assertEqual(self.client.put(url, json={"source_hash": "wrong", "kind": "final", "text": "x"}).status_code, 409)
         self.assertEqual(self.client.put(f"/api/books/{BOOK}/tb/results/TB-9999", json={"source_hash": digest, "kind": "final", "text": "x"}).status_code, 400)
 
+    def test_progress_lists_saved_segments_by_selected_model(self):
+        self.client.put(f"/api/books/{BOOK}/tb/source", json={"name": "book.txt", "text": SOURCE})
+        digest = hashlib.sha256(SOURCE.encode()).hexdigest()
+        url = f"/api/books/{BOOK}/tb/results/TB-0001"
+        self.client.put(url, json={"source_hash": digest, "kind": "model", "model": "gemini:a", "text": "甲"})
+        self.client.put(url, json={"source_hash": digest, "kind": "model", "model": "gemini:b", "text": "乙"})
+        self.client.put(url, json={"source_hash": digest, "kind": "final", "text": "定稿"})
+        keys = [type("Object", (), {"key": key})() for key in self.bucket.objects]
+        with patch("zeabur_app.tb_translation.oss2.ObjectIterator", return_value=keys):
+            response = self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash={digest}&models=gemini:a,gemini:b")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["models"], {"gemini:a": ["TB-0001"], "gemini:b": ["TB-0001"]})
+        self.assertEqual(response.json()["final"], ["TB-0001"])
+        self.client.put(url, json={"source_hash": digest, "kind": "final", "text": ""})
+        with patch("zeabur_app.tb_translation.oss2.ObjectIterator", return_value=keys):
+            cleared = self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash={digest}&models=gemini:a")
+        self.assertEqual(cleared.json()["final"], [])
+        self.assertEqual(self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash=wrong&models=gemini:a").status_code, 409)
+
     def test_rejects_bad_ids_and_bad_source(self):
         self.assertEqual(self.client.put(f"/api/books/{BOOK}/tb/source", json={"name": "x.txt", "text": "not numbered"}).status_code, 400)
         self.assertEqual(self.client.put(f"/api/books/../tb/source", json={"name": "x.txt", "text": SOURCE}).status_code, 404)

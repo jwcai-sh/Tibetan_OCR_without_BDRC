@@ -67,6 +67,18 @@ test('virtual pages never change TB identity', () => {
   assert.deepEqual(core.getVirtualPage(rows, 2, 10).map((row) => row.id).slice(0, 1), ['TB-0011']);
 });
 
+test('model progress counts completed pages and partial final page independently', () => {
+  const rows = Array.from({ length: 17 }, (_, i) => ({ id: `TB-${String(i + 1).padStart(4, '0')}` }));
+  const completed = new Set(rows.slice(0, 15).map((row) => row.id).concat('TB-0017', 'TB-9999'));
+  const progress = core.calculateModelProgress(rows, completed, 15);
+  assert.equal(progress.completedSegments, 16);
+  assert.equal(progress.completedPages, 1);
+  assert.deepEqual(progress.pages, [
+    { page: 1, completed: 15, total: 15 },
+    { page: 2, completed: 1, total: 2 },
+  ]);
+});
+
 test('translation request uses only selected paragraph as source and keeps neighbor context separate', () => {
   const request = core.buildTranslationRequest(
     { id: 'TB-0002', text: 'ཁ།' },

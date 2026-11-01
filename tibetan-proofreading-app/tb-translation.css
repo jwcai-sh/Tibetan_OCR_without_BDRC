@@ -31,3 +31,18 @@
 .tb-embedded main { padding: 14px 18px 24px; }
 .tb-embedded .segment-nav { top: 10px; }
 @media(max-width:600px){.tb-embedded .topbar{padding:12px}.tb-embedded main{padding:12px}}
+
+.progress-overview{margin:0 0 18px;padding:18px;background:#fff;border:1px solid #dae2db;border-radius:12px}
+.progress-heading,.book-progress>div{display:flex;justify-content:space-between;align-items:end;gap:12px;flex-wrap:wrap}
+.progress-heading h2{margin:2px 0 12px;font-size:20px}
+.progress-heading label{display:grid;gap:4px;font-size:13px;font-weight:600}
+.progress-heading select{padding:7px 9px;border:1px solid #b8c5bc;border-radius:7px;background:#fff}
+.book-progress>div{margin-bottom:7px}.book-progress span,.current-page-progress span{color:#5d7065;font-size:13px}
+.book-progress progress,.current-page-progress progress{display:block;width:100%;height:12px;accent-color:#26734f}
+.page-progress-details{margin-top:14px}.page-progress-details summary{cursor:pointer;font-weight:600;margin-bottom:10px}
+.page-progress-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:5px}
+.page-progress-grid button{min-width:0;padding:6px 2px;border-radius:6px;font-size:12px;background:linear-gradient(to right,#b7dbc2 var(--fill),#f4f7f4 var(--fill))}
+.page-progress-grid button.current{outline:2px solid #23644b;outline-offset:1px}
+.page-progress-grid button:focus-visible{outline:3px solid #23644b;outline-offset:2px}
+.current-page-progress{padding:0 12px 10px;border-bottom:1px solid #e2e8e2}
+.current-page-progress progress{height:9px;margin-top:5px}

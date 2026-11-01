@@ -160,6 +160,39 @@ def create_router(storage: Any) -> APIRouter:
             records[segment_id] = record
         return {"source_hash": source_hash, "records": records}
 
+    @router.get("/progress")
+    def get_progress(book_id: str, models: str = "", source_hash: str = "") -> dict[str, Any]:
+        validate_book(book_id)
+        saved_source = source(book_id)
+        if saved_source["source_hash"] != source_hash:
+            raise HTTPException(409, "TB 原文版本不一致，请重新打开书籍")
+        model_ids = list(dict.fromkeys(item.strip() for item in models.split(",") if item.strip()))
+        if not model_ids or len(model_ids) > 5 or any(len(item) > 200 for item in model_ids):
+            raise HTTPException(400, "请提供 1 至 5 个有效模型 ID")
+        source_ids = [f"TB-{match[1]}" for line in saved_source["text"].splitlines()
+                      if (match := SOURCE_LINE.fullmatch(line))]
+        allowed = set(source_ids)
+        model_hashes = {hashlib.sha256(model.encode("utf-8")).hexdigest(): model for model in model_ids}
+        completed = {model: set() for model in model_ids}
+        final = set()
+        prefix = storage.object_key(book_id, "tb/results/")
+        for obj in oss2.ObjectIterator(storage.oss_bucket(), prefix=prefix, max_keys=1000):
+            relative = obj.key.removeprefix(prefix)
+            segment_id, _, suffix = relative.partition("/")
+            if segment_id not in allowed:
+                continue
+            if suffix == "final.json":
+                saved_final = storage.read_json(book_id, f"tb/results/{segment_id}/final.json")
+                if saved_final.get("source_hash") == source_hash and str(saved_final.get("text") or "").strip():
+                    final.add(segment_id)
+            elif match := re.fullmatch(r"models/([0-9a-f]{64})\.json", suffix):
+                if model := model_hashes.get(match[1]):
+                    completed[model].add(segment_id)
+        return {"source_hash": source_hash,
+                "models": {model: [segment_id for segment_id in source_ids if segment_id in ids]
+                           for model, ids in completed.items()},
+                "final": [segment_id for segment_id in source_ids if segment_id in final]}
+
     @router.put("/results/{segment_id}")
     async def put_result(book_id: str, segment_id: str, request: Request) -> dict[str, Any]:
         validate_book(book_id)

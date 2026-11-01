@@ -12,13 +12,16 @@
   const ui = Object.fromEntries([
     'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
     'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
+    'progressOverview', 'progressModelInput', 'progressModelLabel', 'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'pageProgressGrid',
+    'currentPageProgressText', 'currentPageProgressBar',
     'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
     'useAButton', 'useBButton', 'teacherImport', 'yigdzin1Import', 'teacherText', 'yigdzin1Text',
     'teacherMeta', 'yigdzin1Meta', 'useTeacherButton', 'useYigdzin1Button',
     'finalText', 'saveFinalButton', 'saveState',
   ].map((id) => [id, byId(id)]));
-  const state = { rows: [], records: {}, references: { teacher: {}, yigdzin1: {} }, hash: '', name: '', selected: 0, page: 1, db: null, busy: false, controller: null, draftDirty: false };
+  const state = { rows: [], records: {}, progress: { models: {}, final: null }, progressSlot: 0,
+    references: { teacher: {}, yigdzin1: {} }, hash: '', name: '', selected: 0, page: 1, db: null, busy: false, controller: null, draftDirty: false };
 
   async function cloudJson(path, options = {}) {
     const response = await fetch(`${cloudBase}${path}`, { credentials: 'same-origin', ...options });
@@ -72,6 +75,67 @@
       }
     }
     render(false);
+  }
+
+  async function loadCloudProgress() {
+    if (!bookId || !state.rows.length) return;
+    const models = [...new Set(modelIds().filter(Boolean))];
+    const query = new URLSearchParams({ models: models.join(','), source_hash: state.hash });
+    const result = await cloudJson(`/progress?${query}`);
+    if (result.source_hash !== state.hash) return;
+    for (const model of models) state.progress.models[model] = new Set(result.models?.[model] || []);
+    state.progress.final = new Set(result.final || []);
+    render(false);
+  }
+
+  function completedIdsFor(model) {
+    if (bookId) return state.progress.models[model] || null;
+    return new Set(state.rows.filter((row) => state.records[row.id]?.models?.[model]?.text).map((row) => row.id));
+  }
+
+  function renderProgress() {
+    if (!state.rows.length) return;
+    ui.progressOverview.hidden = false;
+    ui.progressModelInput.value = String(state.progressSlot);
+    const model = modelIds()[state.progressSlot];
+    ui.progressModelLabel.textContent = state.progressSlot === 0
+      ? ui.modelAInput.selectedOptions[0]?.textContent || model
+      : ui.modelBInput.value === 'custom' ? model : ui.modelBInput.selectedOptions[0]?.textContent || model;
+    const completed = completedIdsFor(model);
+    if (!completed) {
+      ui.bookProgressText.textContent = '正在统计云端进度…';
+      ui.segmentProgressText.textContent = '';
+      ui.bookProgressBar.value = 0;
+      ui.pageProgressGrid.replaceChildren();
+      ui.currentPageProgressText.textContent = '正在统计当前页…';
+      ui.currentPageProgressBar.value = 0;
+      return;
+    }
+    const progress = core.calculateModelProgress(state.rows, completed, PAGE_SIZE);
+    const pageCount = progress.pages.length;
+    const pagePercent = Math.round(100 * progress.completedPages / pageCount);
+    const segmentPercent = Math.round(100 * progress.completedSegments / state.rows.length);
+    ui.bookProgressText.textContent = `已完成 ${progress.completedPages} / ${pageCount} 页（${pagePercent}%）`;
+    ui.segmentProgressText.textContent = `已译 ${progress.completedSegments} / ${state.rows.length} 段（${segmentPercent}%）`;
+    ui.bookProgressBar.max = pageCount;
+    ui.bookProgressBar.value = progress.completedPages;
+    const current = progress.pages[state.page - 1];
+    ui.currentPageProgressText.textContent = `第 ${state.page} 页：${current.completed} / ${current.total} 段（${Math.round(100 * current.completed / current.total)}%）`;
+    ui.currentPageProgressBar.max = current.total;
+    ui.currentPageProgressBar.value = current.completed;
+    ui.pageProgressGrid.replaceChildren(...progress.pages.map((page) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = String(page.page);
+      button.className = page.page === state.page ? 'current' : '';
+      button.style.setProperty('--fill', `${Math.round(100 * page.completed / page.total)}%`);
+      button.title = `第 ${page.page} 页：${page.completed} / ${page.total} 段（${Math.round(100 * page.completed / page.total)}%）`;
+      button.setAttribute('aria-label', button.title);
+      button.setAttribute('aria-current', page.page === state.page ? 'page' : 'false');
+      button.disabled = state.busy;
+      button.addEventListener('click', () => void goPage(page.page).catch(showError));
+      return button;
+    }));
   }
 
   async function loadReferences() {
@@ -168,6 +232,8 @@
     if (state.rows.length) {
       renderEditor(false);
       if (bookId) void loadCloudRows(core.getVirtualPage(state.rows, state.page, PAGE_SIZE)).catch(showError);
+      if (bookId) void loadCloudProgress().catch(showError);
+      renderProgress();
     }
   }
 
@@ -206,6 +272,7 @@
     state.hash = hash;
     state.name = name;
     state.records = bookId ? {} : Object.fromEntries(stored.map(({ key, ...record }) => [record.id, record]));
+    state.progress = { models: {}, final: null };
     state.references = { teacher: {}, yigdzin1: {} };
     state.selected = 0;
     state.page = 1;
@@ -215,6 +282,7 @@
     render(true);
     if (bookId) {
       await loadCloudRows(rows.slice(0, 30));
+      await loadCloudProgress();
       await loadReferences();
       render(true);
     }
@@ -224,9 +292,11 @@
   function render(resetDraft = false) {
     ui.documentTitle.textContent = state.name;
     const models = modelIds();
-    const done = state.rows.filter((row) => models.every((model) => state.records[row.id]?.models?.[model]?.text)).length;
-    const final = state.rows.filter((row) => state.records[row.id]?.final?.trim()).length;
-    ui.documentSummary.textContent = `${state.rows.length} 段 · 双模型完成 ${done} · 定稿 ${final}`;
+    const first = completedIdsFor(models[0]);
+    const second = completedIdsFor(models[1]);
+    const done = first && second ? [...first].filter((id) => second.has(id)).length : null;
+    const final = bookId ? state.progress.final?.size : state.rows.filter((row) => state.records[row.id]?.final?.trim()).length;
+    ui.documentSummary.textContent = `${state.rows.length} 段 · 双模型完成 ${done ?? '统计中'} · 定稿 ${final ?? '统计中'}`;
     const count = Math.ceil(state.rows.length / PAGE_SIZE);
     ui.pageInput.max = String(count);
     ui.pageInput.value = String(state.page);
@@ -248,6 +318,7 @@
       button.addEventListener('click', () => void showSegment(state.rows.indexOf(row)).catch(showError));
       return button;
     }));
+    renderProgress();
     renderEditor(resetDraft);
   }
 
@@ -282,6 +353,8 @@
     if (!state.draftDirty && record.final === ui.finalText.value) return;
     await saveCloudResult(row.id, 'final', ui.finalText.value);
     record.final = ui.finalText.value;
+    if (record.final.trim()) state.progress.final?.add(row.id);
+    else state.progress.final?.delete(row.id);
     await saveRecord(row.id);
     state.draftDirty = false;
     ui.saveState.textContent = '已保存';
@@ -312,6 +385,7 @@
     [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
       ui.previousPageButton, ui.nextPageButton].forEach((input) => { input.disabled = busy; });
     ui.segmentList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+    ui.pageProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
   }
 
@@ -400,6 +474,7 @@
     await saveCloudResult(row.id, 'model', text, model);
     const record = recordFor(row.id);
     record.models[model] = { text, updatedAt: new Date().toISOString() };
+    state.progress.models[model]?.add(row.id);
     await saveRecord(row.id);
     render(false);
   }
@@ -523,11 +598,17 @@
     });
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
-  [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', saveSettings));
+  [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', () => {
+    if (input === ui.modelAInput) state.progressSlot = 0;
+    if (input === ui.modelBInput || input === ui.customModelBInput) state.progressSlot = 1;
+    saveSettings();
+  }));
+  ui.progressModelInput.addEventListener('change', () => { state.progressSlot = Number(ui.progressModelInput.value); renderProgress(); });
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) {
       renderEditor(false);
+      renderProgress();
       updateGeminiBatchControls();
     }
   }));
