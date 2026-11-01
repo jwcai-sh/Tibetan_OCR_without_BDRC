@@ -73,5 +73,6 @@ test('older view=tb links still open TB and OCR keeps its own workbench', () => 
 test('the TB comparison retains the Gemini model selector', () => {
   const html = fs.readFileSync(path.join(__dirname, '../tb-translation.html'), 'utf8');
   assert.match(html, /<select id="modelAInput" aria-label="Gemini 翻译模型">/);
+  assert.match(html, /<select id="modelAInput"[^>]*><option value="gemini:gemini-4-argon">Gemini 4 Argon<\/option><option value="gemini:gemini-3\.8-flash">Gemini 3\.8 Flash<\/option>/);
   assert.match(html, /<option value="gemini:gemini-3\.8-flash">/);
 });
