@@ -10,7 +10,7 @@
   const cloudBase = bookId ? `/api/books/${bookId}/tb` : '';
   const byId = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
-    'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
+    'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
     'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
     'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
@@ -210,6 +210,7 @@
     state.page = 1;
     state.draftDirty = false;
     ui.workspace.hidden = false;
+    if (bookId) ui.sourceImportControl.hidden = true;
     render(true);
     if (bookId) {
       await loadCloudRows(rows.slice(0, 30));
@@ -459,11 +460,15 @@
   function showError(error) { status(error?.message || String(error), 'error'); }
 
   restoreSettings();
+  ui.sourceImportControl.hidden = Boolean(bookId);
   if (bookId) {
     ui.endpointInput.value = `${location.origin}/api/translate`;
     byId('backLink').href = `./?workflow=translation&book_id=${encodeURIComponent(bookId)}`;
     status('正在读取本书的 TB 编号原文…');
-    void ensureCloudSource().then((source) => loadDocument(source.text, source.name, source.source_hash)).catch(showError);
+    void ensureCloudSource().then((source) => loadDocument(source.text, source.name, source.source_hash)).catch((error) => {
+      if (!state.rows.length) ui.sourceImportControl.hidden = false;
+      showError(error);
+    });
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
   [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', saveSettings));

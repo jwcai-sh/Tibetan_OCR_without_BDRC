@@ -8,12 +8,12 @@
   <script>if (new URLSearchParams(location.search).get('embedded') === '1') document.documentElement.classList.add('tb-embedded');</script>
   <link rel="stylesheet" href="./tb-translation.css?v=20261101-tb-integrated">
   <script src="./tb-translation-core.js?v=20261101-tb-source-link" defer></script>
-  <script src="./tb-translation.js?v=20261101-tb-source-link" defer></script>
+  <script src="./tb-translation.js?v=20261101-tb-import-state" defer></script>
 </head>
 <body>
   <header class="topbar">
     <div><a id="backLink" href="./">← 返回工作台</a><h1>TB 段落翻译对照</h1><p>一段一号 · Gemini 与 GPT 译文 · 教师和 Yigdzin1 参考稿 · 人工定稿</p></div>
-    <label class="file-button">导入编号 TXT<input id="fileInput" type="file" accept=".txt,text/plain"></label>
+    <label id="sourceImportControl" class="file-button" hidden>导入编号 TXT<input id="fileInput" type="file" accept=".txt,text/plain"></label>
   </header>
   <main>
     <section class="settings" aria-label="翻译设置">
