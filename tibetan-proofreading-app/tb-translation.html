@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>TB 段落翻译对照 · 藏文工作台</title>
+  <link rel="stylesheet" href="./tb-translation.css">
+  <script src="./tb-translation-core.js" defer></script>
+  <script src="./tb-translation.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div><a id="backLink" href="./">← 返回工作台</a><h1>TB 段落翻译对照</h1><p>一段一号 · 双模型比较 · 人工定稿</p></div>
+    <label class="file-button">导入编号 TXT<input id="fileInput" type="file" accept=".txt,text/plain"></label>
+  </header>
+  <main>
+    <section class="settings" aria-label="翻译设置">
+      <label>翻译接口<input id="endpointInput" type="url" value="http://127.0.0.1:8890/api/aggregate/chat" spellcheck="false"></label>
+      <label>模型 A<input id="modelAInput" value="gemini:gemini-3.8-flash" spellcheck="false"></label>
+      <label>模型 B<input id="modelBInput" value="gemini:gemini-3.5-flash-lite" spellcheck="false"></label>
+      <button id="healthButton" type="button">检查翻译接口</button>
+    </section>
+    <p id="status" role="status" aria-live="polite">请选择含 [TB-0001] 编号的 TXT 文件。原文留在本机，译文按文件内容保存到此浏览器。</p>
+    <section id="workspace" class="workspace" hidden>
+      <aside class="segment-nav" aria-label="段落导航">
+        <div class="nav-head"><h2 id="documentTitle"></h2><p id="documentSummary"></p></div>
+        <div class="page-controls">
+          <button id="previousPageButton" type="button">上一页</button>
+          <label>第 <input id="pageInput" type="number" min="1" value="1"> 页</label>
+          <span id="pageTotal"></span>
+          <button id="nextPageButton" type="button">下一页</button>
+        </div>
+        <div id="segmentList" class="segment-list"></div>
+      </aside>
+      <section class="editor" aria-label="当前段落">
+        <div class="editor-head"><div><span class="eyebrow">当前翻译单位</span><h2 id="segmentTitle"></h2></div><span id="segmentProgress"></span></div>
+        <div class="source-card"><h3>藏文原文</h3><p id="sourceText" lang="bo"></p></div>
+        <div class="actions">
+          <button id="translateAButton" type="button">翻译模型 A</button>
+          <button id="translateBButton" type="button">翻译模型 B</button>
+          <button id="pilotButton" type="button">从当前段试译 20 段</button>
+          <button id="stopButton" type="button" disabled>停止</button>
+          <button id="exportButton" type="button">导出全部对照</button>
+        </div>
+        <div class="model-grid">
+          <section><h3 id="modelATitle">模型 A</h3><textarea id="modelAText" readonly placeholder="尚未翻译"></textarea><button id="useAButton" type="button">采用 A 为定稿</button></section>
+          <section><h3 id="modelBTitle">模型 B</h3><textarea id="modelBText" readonly placeholder="尚未翻译"></textarea><button id="useBButton" type="button">采用 B 为定稿</button></section>
+        </div>
+        <label class="final-editor"><strong>人工定稿</strong><textarea id="finalText" placeholder="比较模型译文后，在这里编辑最终译文"></textarea></label>
+        <div class="save-row"><button id="saveFinalButton" type="button">保存定稿</button><span id="saveState">未修改</span></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

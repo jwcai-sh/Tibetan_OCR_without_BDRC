@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT))
 from tibetan_ocr_bridge import load_ai_ocr_module, call_ai_layout, call_ai_line_preview, call_ai_line_review, call_ai_ocr, call_ai_page_review, call_ai_review_models
 from tibetan_translation_bridge import call_translation, translation_health
 from zeabur_app import collaboration
+from zeabur_app.tb_translation import create_router as create_tb_translation_router
 
 
 def env(name: str, default: str = "") -> str:
@@ -1187,4 +1188,5 @@ def root() -> RedirectResponse:
     return RedirectResponse("/tibetan-proofreading-app/")
 
 
+app.include_router(create_tb_translation_router(sys.modules[__name__]))
 app.mount("/tibetan-proofreading-app", StaticFiles(directory=ROOT / "tibetan-proofreading-app", html=True), name="workbench")
