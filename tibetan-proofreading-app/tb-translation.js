@@ -12,7 +12,8 @@
   const ui = Object.fromEntries([
     'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
     'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
-    'progressOverview', 'progressModelInput', 'progressModelLabel', 'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'pageProgressGrid',
+    'progressOverview', 'progressModelInput', 'progressModelLabel', 'progressPageRangeLabel', 'progressPageSelect',
+    'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'segmentGridTitle', 'segmentGridSummary', 'segmentProgressGrid',
     'currentPageProgressText', 'currentPageProgressBar',
     'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
@@ -97,6 +98,20 @@
     if (!state.rows.length) return;
     ui.progressOverview.hidden = false;
     ui.progressModelInput.value = String(state.progressSlot);
+    const pageCount = Math.ceil(state.rows.length / PAGE_SIZE);
+    ui.progressPageRangeLabel.textContent = `页码范围 · 1–${pageCount} 页`;
+    if (ui.progressPageSelect.dataset.sourceHash !== state.hash) {
+      ui.progressPageSelect.replaceChildren(...Array.from({ length: pageCount }, (_, index) => {
+        const page = index + 1;
+        const rows = core.getVirtualPage(state.rows, page, PAGE_SIZE);
+        const option = document.createElement('option');
+        option.value = String(page);
+        option.textContent = `第 ${page} 页 · ${rows[0].id}–${rows.at(-1).id}`;
+        return option;
+      }));
+      ui.progressPageSelect.dataset.sourceHash = state.hash;
+    }
+    ui.progressPageSelect.value = String(state.page);
     const model = modelIds()[state.progressSlot];
     ui.progressModelLabel.textContent = state.progressSlot === 0
       ? ui.modelAInput.selectedOptions[0]?.textContent || model
@@ -106,13 +121,14 @@
       ui.bookProgressText.textContent = '正在统计云端进度…';
       ui.segmentProgressText.textContent = '';
       ui.bookProgressBar.value = 0;
-      ui.pageProgressGrid.replaceChildren();
+      ui.segmentGridTitle.textContent = `第 ${state.page} 页 · 段落进度`;
+      ui.segmentGridSummary.textContent = '正在统计…';
+      ui.segmentProgressGrid.replaceChildren();
       ui.currentPageProgressText.textContent = '正在统计当前页…';
       ui.currentPageProgressBar.value = 0;
       return;
     }
     const progress = core.calculateModelProgress(state.rows, completed, PAGE_SIZE);
-    const pageCount = progress.pages.length;
     const pagePercent = Math.round(100 * progress.completedPages / pageCount);
     const segmentPercent = Math.round(100 * progress.completedSegments / state.rows.length);
     ui.bookProgressText.textContent = `已完成 ${progress.completedPages} / ${pageCount} 页（${pagePercent}%）`;
@@ -123,17 +139,19 @@
     ui.currentPageProgressText.textContent = `第 ${state.page} 页：${current.completed} / ${current.total} 段（${Math.round(100 * current.completed / current.total)}%）`;
     ui.currentPageProgressBar.max = current.total;
     ui.currentPageProgressBar.value = current.completed;
-    ui.pageProgressGrid.replaceChildren(...progress.pages.map((page) => {
+    ui.segmentGridTitle.textContent = `第 ${state.page} 页 · 段落进度`;
+    ui.segmentGridSummary.textContent = `${current.completed} / ${current.total} 段已译`;
+    const start = (state.page - 1) * PAGE_SIZE;
+    ui.segmentProgressGrid.replaceChildren(...core.getVirtualPage(state.rows, state.page, PAGE_SIZE).map((row, offset) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = String(page.page);
-      button.className = page.page === state.page ? 'current' : '';
-      button.style.setProperty('--fill', `${Math.round(100 * page.completed / page.total)}%`);
-      button.title = `第 ${page.page} 页：${page.completed} / ${page.total} 段（${Math.round(100 * page.completed / page.total)}%）`;
+      button.textContent = row.id;
+      button.className = `${completed.has(row.id) ? 'translated' : ''}${start + offset === state.selected ? ' current' : ''}`.trim();
+      button.title = `${row.id} · ${completed.has(row.id) ? '已译' : '未译'} · 点击定位`;
       button.setAttribute('aria-label', button.title);
-      button.setAttribute('aria-current', page.page === state.page ? 'page' : 'false');
+      button.setAttribute('aria-current', start + offset === state.selected ? 'true' : 'false');
       button.disabled = state.busy;
-      button.addEventListener('click', () => void goPage(page.page).catch(showError));
+      button.addEventListener('click', () => void showSegment(start + offset).catch(showError));
       return button;
     }));
   }
@@ -380,7 +398,8 @@
     [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
       ui.previousPageButton, ui.nextPageButton].forEach((input) => { input.disabled = busy; });
     ui.segmentList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
-    ui.pageProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+    ui.progressPageSelect.disabled = busy;
+    ui.segmentProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
   }
 
@@ -603,6 +622,7 @@
     render(false);
     if (bookId && !completedIdsFor(modelIds()[state.progressSlot])) void loadCloudProgress().catch(showError);
   });
+  ui.progressPageSelect.addEventListener('change', () => void goPage(Number(ui.progressPageSelect.value)).catch(showError));
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) {
