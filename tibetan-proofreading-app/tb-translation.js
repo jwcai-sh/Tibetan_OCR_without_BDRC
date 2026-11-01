@@ -20,7 +20,7 @@
     'teacherMeta', 'yigdzin1Meta', 'useTeacherButton', 'useYigdzin1Button',
     'finalText', 'saveFinalButton', 'saveState',
   ].map((id) => [id, byId(id)]));
-  const state = { rows: [], records: {}, progress: { models: {}, final: null }, progressSlot: 0,
+  const state = { rows: [], records: {}, progress: { models: {} }, progressSlot: 0,
     references: { teacher: {}, yigdzin1: {} }, hash: '', name: '', selected: 0, page: 1, db: null, busy: false, controller: null, draftDirty: false };
 
   async function cloudJson(path, options = {}) {
@@ -79,12 +79,12 @@
 
   async function loadCloudProgress() {
     if (!bookId || !state.rows.length) return;
-    const models = [...new Set(modelIds().filter(Boolean))];
-    const query = new URLSearchParams({ models: models.join(','), source_hash: state.hash });
+    const model = modelIds()[state.progressSlot];
+    if (!model) return;
+    const query = new URLSearchParams({ models: model, source_hash: state.hash });
     const result = await cloudJson(`/progress?${query}`);
     if (result.source_hash !== state.hash) return;
-    for (const model of models) state.progress.models[model] = new Set(result.models?.[model] || []);
-    state.progress.final = new Set(result.final || []);
+    state.progress.models[model] = new Set(result.models?.[model] || []);
     render(false);
   }
 
@@ -272,7 +272,7 @@
     state.hash = hash;
     state.name = name;
     state.records = bookId ? {} : Object.fromEntries(stored.map(({ key, ...record }) => [record.id, record]));
-    state.progress = { models: {}, final: null };
+    state.progress = { models: {} };
     state.references = { teacher: {}, yigdzin1: {} };
     state.selected = 0;
     state.page = 1;
@@ -292,11 +292,8 @@
   function render(resetDraft = false) {
     ui.documentTitle.textContent = state.name;
     const models = modelIds();
-    const first = completedIdsFor(models[0]);
-    const second = completedIdsFor(models[1]);
-    const done = first && second ? [...first].filter((id) => second.has(id)).length : null;
-    const final = bookId ? state.progress.final?.size : state.rows.filter((row) => state.records[row.id]?.final?.trim()).length;
-    ui.documentSummary.textContent = `${state.rows.length} 段 · 双模型完成 ${done ?? '统计中'} · 定稿 ${final ?? '统计中'}`;
+    const completed = completedIdsFor(models[state.progressSlot]);
+    ui.documentSummary.textContent = `${state.rows.length} 段 · 当前模型已译 ${completed?.size ?? '统计中'}`;
     const count = Math.ceil(state.rows.length / PAGE_SIZE);
     ui.pageInput.max = String(count);
     ui.pageInput.value = String(state.page);
@@ -353,8 +350,6 @@
     if (!state.draftDirty && record.final === ui.finalText.value) return;
     await saveCloudResult(row.id, 'final', ui.finalText.value);
     record.final = ui.finalText.value;
-    if (record.final.trim()) state.progress.final?.add(row.id);
-    else state.progress.final?.delete(row.id);
     await saveRecord(row.id);
     state.draftDirty = false;
     ui.saveState.textContent = '已保存';
@@ -603,7 +598,11 @@
     if (input === ui.modelBInput || input === ui.customModelBInput) state.progressSlot = 1;
     saveSettings();
   }));
-  ui.progressModelInput.addEventListener('change', () => { state.progressSlot = Number(ui.progressModelInput.value); renderProgress(); });
+  ui.progressModelInput.addEventListener('change', () => {
+    state.progressSlot = Number(ui.progressModelInput.value);
+    render(false);
+    if (bookId && !completedIdsFor(modelIds()[state.progressSlot])) void loadCloudProgress().catch(showError);
+  });
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) {

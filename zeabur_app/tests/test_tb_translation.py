@@ -38,6 +38,11 @@ class FakeBucket:
             raise oss2.exceptions.ObjectAlreadyExists(409, {}, b"", {})
         self.objects[key] = body
 
+    def head_object(self, key):
+        if key not in self.objects:
+            raise oss2.exceptions.NoSuchKey(404, {}, b"", {})
+        return object()
+
 
 class TbTranslationTest(unittest.TestCase):
     def setUp(self):
@@ -78,16 +83,10 @@ class TbTranslationTest(unittest.TestCase):
         self.client.put(url, json={"source_hash": digest, "kind": "model", "model": "gemini:a", "text": "甲"})
         self.client.put(url, json={"source_hash": digest, "kind": "model", "model": "gemini:b", "text": "乙"})
         self.client.put(url, json={"source_hash": digest, "kind": "final", "text": "定稿"})
-        keys = [type("Object", (), {"key": key})() for key in self.bucket.objects]
-        with patch("zeabur_app.tb_translation.oss2.ObjectIterator", return_value=keys):
+        with patch("zeabur_app.tb_translation.oss2.ObjectIterator", side_effect=RuntimeError("ListObjects forbidden")):
             response = self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash={digest}&models=gemini:a,gemini:b")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["models"], {"gemini:a": ["TB-0001"], "gemini:b": ["TB-0001"]})
-        self.assertEqual(response.json()["final"], ["TB-0001"])
-        self.client.put(url, json={"source_hash": digest, "kind": "final", "text": ""})
-        with patch("zeabur_app.tb_translation.oss2.ObjectIterator", return_value=keys):
-            cleared = self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash={digest}&models=gemini:a")
-        self.assertEqual(cleared.json()["final"], [])
         self.assertEqual(self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash=wrong&models=gemini:a").status_code, 409)
 
     def test_rejects_bad_ids_and_bad_source(self):
