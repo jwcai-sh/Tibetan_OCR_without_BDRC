@@ -25,9 +25,37 @@
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401) throw new Error('协作登录已失效，请返回原书页面重新登录后再打开 TB 翻译。');
-      throw new Error(payload.detail || payload.error || `云端请求失败：HTTP ${response.status}`);
+      throw Object.assign(new Error(payload.detail || payload.error || `云端请求失败：HTTP ${response.status}`), { status: response.status });
     }
     return payload;
+  }
+
+  async function readOriginalBookSource() {
+    status('正在读取已选的云端编号 TXT 并关联到 TB 段落…');
+    const response = await fetch(`/api/books/${bookId}/source`, { credentials: 'same-origin' });
+    if (!response.ok) {
+      if (response.status === 401) throw new Error('协作登录已失效，请返回书籍目录重新登录。');
+      throw new Error(`读取已选文件失败：HTTP ${response.status}`);
+    }
+    const disposition = response.headers.get('content-disposition') || '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    let name = '云端原文.txt';
+    if (encodedName) {
+      try { name = decodeURIComponent(encodedName); } catch (_) { /* Use the fallback name. */ }
+    }
+    if (!/\.txt$/i.test(name)) throw new Error('所选书籍不是编号 TXT；请从云端目录选择含 [TB-0001] 段号的 TXT。');
+    return { name, text: await response.text() };
+  }
+
+  function ensureCloudSource() {
+    return core.ensureBookTbSource({
+      readAttached: () => cloudJson('/source'),
+      readOriginal: readOriginalBookSource,
+      attach: ({ name, text }) => cloudJson('/source', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, text }),
+      }),
+    });
   }
 
   async function loadCloudRows(rows) {
@@ -435,11 +463,7 @@
     ui.endpointInput.value = `${location.origin}/api/translate`;
     byId('backLink').href = `./?workflow=translation&book_id=${encodeURIComponent(bookId)}`;
     status('正在读取本书的 TB 编号原文…');
-    void cloudJson('/source').then((source) => loadDocument(source.text, source.name, source.source_hash))
-      .catch((error) => {
-        if (/不存在|404|Not Found/.test(error.message)) status('本书尚未关联 TB 编号原文。请导入编号 TXT，原书分页资料会保留。');
-        else showError(error);
-      });
+    void ensureCloudSource().then((source) => loadDocument(source.text, source.name, source.source_hash)).catch(showError);
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
   [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', saveSettings));

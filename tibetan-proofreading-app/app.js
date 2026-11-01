@@ -1290,6 +1290,12 @@ async function removeStoredSourceFile(cacheKey) {
 async function resumeRemoteProject(project, workflow = "ocr", options = {}) {
   const requestId = options.requestId ?? ++state.documentRequestId;
   if (requestId !== state.documentRequestId) return;
+  if (workflow === "translation" && isCloudDeployment() && /^[0-9a-f]{32}$/.test(project.remoteBookId || "")) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("workflow", "translation");
+    url.searchParams.set("book_id", project.remoteBookId);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }
   showWorkbenchView(workflow);
   if (cloudLibrary.authMode === "collaboration" && !cloudLibrary.actor) {
     requestCollaborationLogin(project, workflow);

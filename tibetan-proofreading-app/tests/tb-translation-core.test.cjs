@@ -12,6 +12,55 @@ test('TB parser preserves numbered paragraphs and rejects ambiguous lines', () =
   assert.throws(() => core.parseTbDocument('[TB-0001] ཀ།\n[TB-0001] ཁ།'), /重复/);
 });
 
+test('missing TB source attaches the already selected numbered TXT once', async () => {
+  const original = { name: 'book.txt', text: '[TB-0001] ཀ།\n' };
+  const calls = [];
+  const attached = await core.ensureBookTbSource({
+    readAttached: async () => { calls.push('read TB'); throw Object.assign(new Error('missing'), { status: 404 }); },
+    readOriginal: async () => { calls.push('read original'); return original; },
+    attach: async (source) => { calls.push('attach'); assert.deepEqual(source, original); return { ...source, source_hash: 'hash' }; },
+  });
+  assert.equal(attached.source_hash, 'hash');
+  assert.deepEqual(calls, ['read TB', 'read original', 'attach']);
+});
+
+test('existing TB source is reused without reading or replacing the original', async () => {
+  const saved = { name: 'saved.txt', text: '[TB-0001] ཀ།\n' };
+  const attached = await core.ensureBookTbSource({
+    readAttached: async () => saved,
+    readOriginal: async () => { throw new Error('unexpected original read'); },
+    attach: async () => { throw new Error('unexpected write'); },
+  });
+  assert.equal(attached, saved);
+});
+
+test('unnumbered original is rejected before any TB source write', async () => {
+  let writes = 0;
+  await assert.rejects(core.ensureBookTbSource({
+    readAttached: async () => { throw Object.assign(new Error('missing'), { status: 404 }); },
+    readOriginal: async () => ({ name: 'book.txt', text: 'not numbered' }),
+    attach: async () => { writes += 1; },
+  }), /不是有效的 TB 编号原文/);
+  assert.equal(writes, 0);
+});
+
+test('concurrent attachment reuses matching text but rejects another source', async () => {
+  const original = { name: 'book.txt', text: '\ufeff[TB-0001] ཀ།\r\n' };
+  const conflict = Object.assign(new Error('conflict'), { status: 409 });
+  let reads = 0;
+  const readAttached = async () => {
+    if (reads++ === 0) throw Object.assign(new Error('missing'), { status: 404 });
+    return { text: '[TB-0001] ཀ།\n' };
+  };
+  const attached = await core.ensureBookTbSource({ readAttached, readOriginal: async () => original, attach: async () => { throw conflict; } });
+  assert.equal(attached.text, '[TB-0001] ཀ།\n');
+  await assert.rejects(core.ensureBookTbSource({
+    readAttached: async () => { if (reads++ === 2) throw Object.assign(new Error('missing'), { status: 404 }); return { text: '[TB-0001] ཁ།\n' }; },
+    readOriginal: async () => original,
+    attach: async () => { throw conflict; },
+  }), /conflict/);
+});
+
 test('virtual pages never change TB identity', () => {
   const rows = Array.from({ length: 17 }, (_, i) => ({ id: `TB-${String(i + 1).padStart(4, '0')}`, text: 'ཀ།' }));
   assert.deepEqual(core.getVirtualPage(rows, 2, 15).map((row) => row.id), ['TB-0016', 'TB-0017']);

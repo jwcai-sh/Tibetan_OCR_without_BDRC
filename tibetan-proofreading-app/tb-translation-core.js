@@ -21,6 +21,29 @@
     return rows;
   }
 
+  async function ensureBookTbSource({ readAttached, readOriginal, attach }) {
+    try {
+      return await readAttached();
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    const original = await readOriginal();
+    try {
+      parseTbDocument(original.text);
+    } catch (error) {
+      throw new Error(`所选书籍的 TXT 不是有效的 TB 编号原文：${error.message}`);
+    }
+    try {
+      return await attach(original);
+    } catch (error) {
+      if (error.status !== 409) throw error;
+      const attached = await readAttached();
+      const normalize = (text) => String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+      if (normalize(attached.text) === normalize(original.text)) return attached;
+      throw error;
+    }
+  }
+
   function getVirtualPage(rows, page, size = 15) {
     const start = Math.max(0, (Math.max(1, Math.trunc(page)) - 1) * size);
     return rows.slice(start, start + size);
@@ -134,5 +157,5 @@
     return completed;
   }
 
-  return { parseTbDocument, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
+  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
 });
