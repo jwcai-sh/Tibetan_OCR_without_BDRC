@@ -18,3 +18,16 @@
 .reference-import input{max-width:100%}
 .final-editor{padding:15px;border:1px solid #c8d9cb;border-radius:10px;background:#f7faf7}
 @media(max-width:600px){.settings{grid-template-columns:1fr}.card-actions select{width:100%}}
+
+.tb-embedded .topbar {
+  padding: 12px 22px;
+  background: #fff;
+  color: #21302d;
+  border-bottom: 1px solid #dae2db;
+}
+.tb-embedded .topbar a,
+.tb-embedded .topbar p { display: none; }
+.tb-embedded .topbar h1 { margin: 0; font-size: 18px; }
+.tb-embedded main { padding: 14px 18px 24px; }
+.tb-embedded .segment-nav { top: 10px; }
+@media(max-width:600px){.tb-embedded .topbar{padding:12px}.tb-embedded main{padding:12px}}
