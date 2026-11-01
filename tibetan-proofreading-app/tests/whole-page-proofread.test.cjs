@@ -96,6 +96,11 @@ test('rejects missing page headings and keeps a deliberately empty page', () => 
   assert.throws(() => parsePageTextFile('第 1 页\nཀ་', 2), /2 页/);
 });
 
+test('imports pages separated by the Mingdeng OCR TXT headings', () => {
+  const source = '===== 第 1 页 =====\r\nཀ་\r\n\r\n===== 第 2 页 =====\r\nཁ་\r\n';
+  assert.deepEqual(parsePageTextFile(source, 2), { '1': 'ཀ་', '2': 'ཁ་' });
+});
+
 test('corrected export retains Tibetan line breaks and orders pages numerically', () => {
   const content = buildCorrectedExport([
     { page_num: 2, saved: true, text: 'ག་\r\nང་' },

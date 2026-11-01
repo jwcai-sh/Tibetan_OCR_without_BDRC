@@ -6,7 +6,7 @@
 
   function parsePageTextFile(source, pageCount) {
     const text = String(source || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-    const headings = [...text.matchAll(/^第\s*(\d+)\s*页\s*$/gm)];
+    const headings = [...text.matchAll(/^[ \t]*(?:={3,}[ \t]*)?第[ \t]*(\d+)[ \t]*页(?:[ \t]*={3,})?[ \t]*$/gm)];
     if (headings.length !== pageCount) throw new Error(`需要 ${pageCount} 页，实际找到 ${headings.length} 页`);
     const pages = {};
     headings.forEach((heading, index) => {
