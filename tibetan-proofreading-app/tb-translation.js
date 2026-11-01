@@ -11,8 +11,8 @@
   const byId = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
     'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
-    'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
-    'progressOverview', 'progressModelInput', 'progressModelLabel', 'progressPageRangeLabel',
+    'firstPageButton', 'previousPageButton', 'nextPageButton', 'lastPageButton', 'pageInput', 'pageTotal',
+    'progressOverview', 'progressModelLabel',
     'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'pageProgressGrid',
     'currentPageProgressText', 'currentPageProgressBar',
     'segmentTitle', 'segmentProgress', 'previousSegmentButton', 'nextSegmentButton', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
@@ -94,12 +94,18 @@
     return new Set(state.rows.filter((row) => state.records[row.id]?.models?.[model]?.text).map((row) => row.id));
   }
 
+  function selectProgressModel(slot) {
+    if (state.progressSlot === slot) return;
+    state.progressSlot = slot;
+    if (!state.rows.length) return;
+    renderProgress();
+    if (bookId && !completedIdsFor(modelIds()[slot])) void loadCloudProgress().catch(showError);
+  }
+
   function renderProgress() {
     if (!state.rows.length) return;
     ui.progressOverview.hidden = false;
-    ui.progressModelInput.value = String(state.progressSlot);
     const pageCount = Math.ceil(state.rows.length / PAGE_SIZE);
-    ui.progressPageRangeLabel.textContent = `页码范围 · 1–${pageCount} 页`;
     const model = modelIds()[state.progressSlot];
     ui.progressModelLabel.textContent = state.progressSlot === 0
       ? ui.modelAInput.selectedOptions[0]?.textContent || model
@@ -296,8 +302,10 @@
     ui.pageInput.max = String(count);
     ui.pageInput.value = String(state.page);
     ui.pageTotal.textContent = `/ ${count}`;
+    ui.firstPageButton.disabled = state.busy || state.page <= 1;
     ui.previousPageButton.disabled = state.busy || state.page <= 1;
     ui.nextPageButton.disabled = state.busy || state.page >= count;
+    ui.lastPageButton.disabled = state.busy || state.page >= count;
     ui.previousSegmentButton.disabled = state.busy || state.selected <= 0;
     ui.nextSegmentButton.disabled = state.busy || state.selected >= state.rows.length - 1;
     updateGeminiBatchControls();
@@ -364,7 +372,7 @@
     [ui.translateAButton, ui.translateAllAButton, ui.translateRemainingAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
     ui.stopButton.disabled = !busy;
     [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
-      ui.previousPageButton, ui.nextPageButton, ui.previousSegmentButton, ui.nextSegmentButton].forEach((input) => { input.disabled = busy; });
+      ui.firstPageButton, ui.previousPageButton, ui.nextPageButton, ui.lastPageButton, ui.previousSegmentButton, ui.nextSegmentButton].forEach((input) => { input.disabled = busy; });
     ui.pageProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
   }
@@ -463,6 +471,7 @@
     if (!state.rows.length || state.busy) return;
     const model = modelIds()[which];
     if (!model) { showError(new Error(`请填写模型 ${which === 0 ? 'A' : 'B'} 的完整模型 ID`)); return; }
+    selectProgressModel(which);
     const row = currentRow();
     setBusy(true);
     state.controller = new AbortController();
@@ -579,15 +588,12 @@
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
   [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', () => {
-    if (input === ui.modelAInput) state.progressSlot = 0;
-    if (input === ui.modelBInput || input === ui.customModelBInput) state.progressSlot = 1;
+    if (input === ui.modelAInput) selectProgressModel(0);
+    if (input === ui.modelBInput || input === ui.customModelBInput) selectProgressModel(1);
     saveSettings();
   }));
-  ui.progressModelInput.addEventListener('change', () => {
-    state.progressSlot = Number(ui.progressModelInput.value);
-    render(false);
-    if (bookId && !completedIdsFor(modelIds()[state.progressSlot])) void loadCloudProgress().catch(showError);
-  });
+  ui.modelAInput.addEventListener('focus', () => selectProgressModel(0));
+  [ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('focus', () => selectProgressModel(1)));
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) {
@@ -597,8 +603,10 @@
     }
   }));
   ui.healthButton.addEventListener('click', () => void checkHealth().then((data) => status(`翻译服务已就绪：${data.provider || ''} ${data.model || ''}`, 'success')).catch(showError));
+  ui.firstPageButton.addEventListener('click', () => void goPage(1).catch(showError));
   ui.previousPageButton.addEventListener('click', () => void goPage(state.page - 1).catch(showError));
   ui.nextPageButton.addEventListener('click', () => void goPage(state.page + 1).catch(showError));
+  ui.lastPageButton.addEventListener('click', () => void goPage(Math.ceil(state.rows.length / PAGE_SIZE)).catch(showError));
   let pageNavigationPending = false;
   async function navigateFromPageInput() {
     if (pageNavigationPending || Number(ui.pageInput.value) === state.page) return;
