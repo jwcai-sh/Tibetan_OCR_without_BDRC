@@ -12,7 +12,7 @@
   const ui = Object.fromEntries([
     'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
     'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
-    'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateBButton',
+    'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
     'useAButton', 'useBButton', 'teacherImport', 'yigdzin1Import', 'teacherText', 'yigdzin1Text',
     'teacherMeta', 'yigdzin1Meta', 'useTeacherButton', 'useYigdzin1Button',
@@ -58,13 +58,14 @@
     });
   }
 
-  async function loadCloudRows(rows) {
+  async function loadCloudRows(rows, signal) {
     if (!bookId || !rows.length) return;
     const models = modelIds().filter(Boolean);
     for (let start = 0; start < rows.length; start += 30) {
+      if (signal?.aborted) throw new Error('已停止翻译');
       const ids = rows.slice(start, start + 30).map((row) => row.id).join(',');
       const query = new URLSearchParams({ ids, models: models.join(','), source_hash: state.hash });
-      const result = await cloudJson(`/results?${query}`);
+      const result = await cloudJson(`/results?${query}`, signal ? { signal } : {});
       for (const [id, record] of Object.entries(result.records || {})) {
         state.records[id] = { ...(state.records[id] || {}), ...record,
           models: { ...(state.records[id]?.models || {}), ...(record.models || {}) } };
@@ -232,6 +233,7 @@
     ui.pageTotal.textContent = `/ ${count}`;
     ui.previousPageButton.disabled = state.busy || state.page <= 1;
     ui.nextPageButton.disabled = state.busy || state.page >= count;
+    updateGeminiBatchControls();
     ui.segmentList.replaceChildren(...core.getVirtualPage(state.rows, state.page, PAGE_SIZE).map((row) => {
       const button = document.createElement('button');
       button.type = 'button';
@@ -305,12 +307,18 @@
 
   function setBusy(busy) {
     state.busy = busy;
-    [ui.translateAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
+    [ui.translateAButton, ui.translateAllAButton, ui.translateRemainingAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
     ui.stopButton.disabled = !busy;
     [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
       ui.previousPageButton, ui.nextPageButton].forEach((input) => { input.disabled = busy; });
     ui.segmentList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
+  }
+
+  function updateGeminiBatchControls() {
+    const available = state.rows.length > 0 && !state.busy;
+    ui.translateAllAButton.disabled = !available;
+    ui.translateRemainingAButton.disabled = !available || !core.selectModelBatchRows(state.rows, state.records, modelIds()[0], 'remaining').length;
   }
 
   function addAvailableModels(data) {
@@ -436,6 +444,50 @@
     finally { state.controller = null; setBusy(false); }
   }
 
+  async function runGeminiBatch(mode) {
+    if (!state.rows.length || state.busy) return;
+    const model = modelIds()[0];
+    if (!model) { showError(new Error('请先选择 Gemini 翻译模型')); return; }
+    setBusy(true);
+    state.controller = new AbortController();
+    let completed = 0;
+    let failed = 0;
+    try {
+      await checkHealth();
+      if (mode === 'remaining' && bookId) {
+        status('正在读取本书已有的 Gemini 译文…');
+        await loadCloudRows(state.rows, state.controller.signal);
+      }
+      const rows = core.selectModelBatchRows(state.rows, state.records, model, mode);
+      if (!rows.length) {
+        status(`${model} 的所有段落已有译文。`, 'success');
+        return;
+      }
+      status(`${mode === 'all' ? '重新翻译所有段' : '翻译剩余段'}：${rows.length} 段，模型 ${model}。每段完成后保存，可随时停止。`);
+      await core.runTranslationBatch(rows, [model], state.records,
+        (row) => translateRow(row, model, state.controller.signal),
+        async (row, selectedModel, text) => {
+          await saveModel(row, selectedModel, text);
+          completed += 1;
+          status(`已保存 ${completed}/${rows.length}：${row.id} / ${selectedModel}，可随时停止。`, 'success');
+        }, state.controller.signal, {
+          skipExisting: mode !== 'all',
+          continueOnError: true,
+          onError: (row, selectedModel, error) => {
+            failed += 1;
+            status(`${row.id} / ${selectedModel} 失败：${error.message || error}。继续下一段；稍后可用“翻译剩余段”补译。`, 'error');
+          },
+        });
+      status(`${mode === 'all' ? '全部' : '剩余'}段落翻译结束：已保存 ${completed} 段，失败 ${failed} 段。${failed ? '可用“翻译剩余段”补译。' : ''}`, failed ? 'error' : 'success');
+    } catch (error) {
+      if (state.controller.signal.aborted) status(`已停止；本次已保存 ${completed} 段。`);
+      else showError(new Error(`${error.message || error}；本次已保存 ${completed} 段。`));
+    } finally {
+      state.controller = null;
+      setBusy(false);
+    }
+  }
+
   function useCandidate(text) {
     ui.finalText.value = text;
     state.draftDirty = true;
@@ -474,13 +526,18 @@
   [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', saveSettings));
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
-    if (state.rows.length) renderEditor(false);
+    if (state.rows.length) {
+      renderEditor(false);
+      updateGeminiBatchControls();
+    }
   }));
   ui.healthButton.addEventListener('click', () => void checkHealth().then((data) => status(`翻译服务已就绪：${data.provider || ''} ${data.model || ''}`, 'success')).catch(showError));
   ui.previousPageButton.addEventListener('click', () => void goPage(state.page - 1).catch(showError));
   ui.nextPageButton.addEventListener('click', () => void goPage(state.page + 1).catch(showError));
   ui.pageInput.addEventListener('change', () => void goPage(Number(ui.pageInput.value)).catch(showError));
   ui.translateAButton.addEventListener('click', () => void runOne(0));
+  ui.translateAllAButton.addEventListener('click', () => void runGeminiBatch('all'));
+  ui.translateRemainingAButton.addEventListener('click', () => void runGeminiBatch('remaining'));
   ui.translateBButton.addEventListener('click', () => void runOne(1));
   ui.pilotButton.addEventListener('click', () => void runPilot());
   ui.stopButton.addEventListener('click', () => state.controller?.abort());

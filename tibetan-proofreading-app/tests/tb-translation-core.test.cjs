@@ -128,6 +128,50 @@ test('batch skips saved model results and persists each success before later fai
   assert.deepEqual(saved, ['TB-0001:b:译文']);
 });
 
+test('Gemini all and remaining batches use different ranges for the selected model', async () => {
+  const rows = [{ id: 'TB-0001', text: 'ཀ།' }, { id: 'TB-0002', text: 'ཁ།' }];
+  const records = { 'TB-0001': { models: { 'gemini:gemini-4-argon': { text: '旧译' } } } };
+  const model = 'gemini:gemini-4-argon';
+  assert.deepEqual(core.selectModelBatchRows(rows, records, model, 'all'), rows);
+  assert.deepEqual(core.selectModelBatchRows(rows, records, model, 'remaining'), [rows[1]]);
+  assert.deepEqual(core.selectModelBatchRows(rows, records, 'gemini:gemini-3.8-flash', 'remaining'), rows);
+  const saved = [];
+  const completed = await core.runTranslationBatch(rows, [model], records,
+    async (row) => `${row.id} 新译`,
+    async (row, selectedModel, text) => saved.push([row.id, selectedModel, text]),
+    undefined, { skipExisting: false });
+  assert.equal(completed, 2);
+  assert.deepEqual(saved.map(([id]) => id), ['TB-0001', 'TB-0002']);
+  assert.equal(records['TB-0001'].models[model].text, '旧译');
+});
+
+test('stopping a batch keeps earlier saved paragraphs', async () => {
+  const rows = [{ id: 'TB-0001', text: 'ཀ།' }, { id: 'TB-0002', text: 'ཁ།' }];
+  const controller = new AbortController();
+  const saved = [];
+  await assert.rejects(core.runTranslationBatch(rows, ['gemini:gemini-4-argon'], {},
+    async (row) => row.text,
+    async (row) => { saved.push(row.id); controller.abort(); },
+    controller.signal), /已停止翻译/);
+  assert.deepEqual(saved, ['TB-0001']);
+});
+
+test('all-paragraph batch continues past a failed segment and reports it', async () => {
+  const rows = [1, 2, 3].map((number) => ({ id: `TB-000${number}`, text: `row ${number}` }));
+  const saved = [];
+  const failed = [];
+  const completed = await core.runTranslationBatch(rows, ['gemini:gemini-4-argon'], {},
+    async (row) => {
+      if (row.id === 'TB-0002') throw new Error('503');
+      return '译文';
+    },
+    async (row) => saved.push(row.id),
+    undefined, { continueOnError: true, onError: (row) => failed.push(row.id) });
+  assert.equal(completed, 2);
+  assert.deepEqual(saved, ['TB-0001', 'TB-0003']);
+  assert.deepEqual(failed, ['TB-0002']);
+});
+
 test('numbered reference text maps to TB ids and keeps continuation lines', () => {
   const rows = core.parseTbDocument('[TB-0001] ཀ།\n[TB-0002] ཁ།');
   assert.deepEqual(core.parseReferenceDocument('[TB-0001] 第一段\n续句\n[TB-0002] 第二段', rows), {

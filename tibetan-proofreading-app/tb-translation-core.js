@@ -121,6 +121,12 @@
     return colon > 0 && requested.slice(colon + 1) === actual;
   }
 
+  function selectModelBatchRows(rows, records, model, mode) {
+    if (mode === 'all') return rows.slice();
+    if (mode === 'remaining') return rows.filter((row) => !records[row.id]?.models?.[model]?.text);
+    throw new Error(`未知的批量翻译范围：${mode}`);
+  }
+
   function exportTranslationMarkdown(rows, records, models, references = {}) {
     const lines = ['# TB 段落翻译对照', ''];
     rows.forEach((row) => {
@@ -137,16 +143,20 @@
     return lines.join('\n');
   }
 
-  async function runTranslationBatch(rows, modelIds, existing, translate, onResult, signal) {
+  async function runTranslationBatch(rows, modelIds, existing, translate, onResult, signal, options = {}) {
     let completed = 0;
     for (const row of rows) {
       for (const model of modelIds) {
         if (signal?.aborted) throw new Error('已停止翻译');
-        if (existing[row.id]?.models?.[model]?.text) continue;
+        if (options.skipExisting !== false && existing[row.id]?.models?.[model]?.text) continue;
         let text;
         try {
           text = await translate(row, model);
         } catch (error) {
+          if (options.continueOnError && !signal?.aborted) {
+            await options.onError?.(row, model, error);
+            continue;
+          }
           throw new Error(`${row.id} / ${model}：${error?.message || error}`);
         }
         if (signal?.aborted) throw new Error('已停止翻译');
@@ -157,5 +167,5 @@
     return completed;
   }
 
-  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
+  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, selectModelBatchRows, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
 });
