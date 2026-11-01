@@ -78,3 +78,13 @@ test('batch skips saved model results and persists each success before later fai
   assert.deepEqual(calls, ['TB-0001:b', 'TB-0002:a']);
   assert.deepEqual(saved, ['TB-0001:b:译文']);
 });
+
+test('numbered reference text maps to TB ids and keeps continuation lines', () => {
+  const rows = core.parseTbDocument('[TB-0001] ཀ།\n[TB-0002] ཁ།');
+  assert.deepEqual(core.parseReferenceDocument('[TB-0001] 第一段\n续句\n[TB-0002] 第二段', rows), {
+    'TB-0001': '第一段\n续句', 'TB-0002': '第二段',
+  });
+  assert.throws(() => core.parseReferenceDocument('[TB-0003] 错段', rows), /TB-0003/);
+  const exported = core.exportTranslationMarkdown(rows, {}, [], { teacher: { 'TB-0001': '教师文字' } });
+  assert.match(exported, /教师校正稿[\s\S]*教师文字/);
+});

@@ -95,3 +95,15 @@ class TbTranslationTest(unittest.TestCase):
                 result = self.client.get(queued.json()["status_url"])
             self.assertEqual(result.json()["translation"], "甲")
             self.assertEqual(result.json()["model"], "gemini:a")
+
+    def test_numbered_reference_is_kept_separate_from_model_results(self):
+        attached = self.client.put(f"/api/books/{BOOK}/tb/source", json={"name": "book.txt", "text": SOURCE}).json()
+        url = f"/api/books/{BOOK}/tb/references/teacher"
+        payload = {"source_hash": attached["source_hash"], "name": "teacher.txt", "entries": {"TB-0001": "教师文字"}}
+        self.assertEqual(self.client.put(url, json=payload).status_code, 200)
+        self.assertEqual(self.client.get(url).json()["entries"], {"TB-0001": "教师文字"})
+        self.assertEqual(self.client.get(f"/api/books/{BOOK}/tb/references/yigdzin1").status_code, 404)
+        self.assertEqual(self.bucket.objects[PREFIX + "state.json"], b'{"page_count":2}')
+        self.assertEqual(self.client.put(url, json={**payload, "entries": {"TB-9999": "x"}}).status_code, 400)
+        self.assertEqual(self.client.put(url, json={**payload, "source_hash": "wrong"}).status_code, 409)
+        self.assertEqual(self.client.put(f"/api/books/{BOOK}/tb/references/other", json=payload).status_code, 400)

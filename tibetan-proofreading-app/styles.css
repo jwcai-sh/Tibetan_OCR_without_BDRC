@@ -62,6 +62,15 @@ button {
   overflow: hidden;
 }
 
+.app-shell .project-actions .tb-translation-entry {
+  display: none;
+  text-decoration: none;
+}
+
+.app-shell.translation-workflow .project-actions .tb-translation-entry {
+  display: inline-flex;
+}
+
 .translation-feature {
   display: none !important;
 }

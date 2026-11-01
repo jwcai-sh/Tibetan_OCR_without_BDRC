@@ -4,19 +4,21 @@
   const PAGE_SIZE = 15;
   const DB_NAME = 'tb-paragraph-translations-v1';
   const STORE_NAME = 'results';
-  const settingsKey = 'tb-paragraph-translations:settings-v1';
+  const settingsKey = 'tb-paragraph-translations:settings-v2';
   const routeBookId = new URLSearchParams(location.search).get('book_id');
   const bookId = /^[0-9a-f]{32}$/.test(routeBookId || '') ? routeBookId : '';
   const cloudBase = bookId ? `/api/books/${bookId}/tb` : '';
   const byId = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
-    'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'healthButton', 'status', 'workspace',
+    'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
     'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
     'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
-    'useAButton', 'useBButton', 'finalText', 'saveFinalButton', 'saveState',
+    'useAButton', 'useBButton', 'teacherImport', 'yigdzin1Import', 'teacherText', 'yigdzin1Text',
+    'teacherMeta', 'yigdzin1Meta', 'useTeacherButton', 'useYigdzin1Button',
+    'finalText', 'saveFinalButton', 'saveState',
   ].map((id) => [id, byId(id)]));
-  const state = { rows: [], records: {}, hash: '', name: '', selected: 0, page: 1, db: null, busy: false, controller: null, draftDirty: false };
+  const state = { rows: [], records: {}, references: { teacher: {}, yigdzin1: {} }, hash: '', name: '', selected: 0, page: 1, db: null, busy: false, controller: null, draftDirty: false };
 
   async function cloudJson(path, options = {}) {
     const response = await fetch(`${cloudBase}${path}`, { credentials: 'same-origin', ...options });
@@ -41,6 +43,30 @@
       }
     }
     render(false);
+  }
+
+  async function loadReferences() {
+    if (!bookId) return;
+    for (const kind of ['teacher', 'yigdzin1']) {
+      try {
+        const saved = await cloudJson(`/references/${kind}`);
+        if (saved.source_hash === state.hash) state.references[kind] = saved.entries || {};
+        ui[kind === 'teacher' ? 'teacherMeta' : 'yigdzin1Meta'].textContent = `${saved.name || '参考稿'} · ${Object.keys(state.references[kind]).length} 段`;
+      } catch (error) {
+        if (!/不存在|404|Not Found/.test(error.message)) throw error;
+      }
+    }
+  }
+
+  async function importReference(kind, file) {
+    if (!file || !state.rows.length) throw new Error('请先打开 TB 编号原文');
+    const entries = core.parseReferenceDocument(await file.text(), state.rows);
+    if (bookId) await cloudJson(`/references/${kind}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_hash: state.hash, name: file.name, entries }) });
+    state.references[kind] = entries;
+    ui[kind === 'teacher' ? 'teacherMeta' : 'yigdzin1Meta'].textContent = `${file.name} · ${Object.keys(entries).length} 段`;
+    renderEditor(false);
+    status(`${kind === 'teacher' ? '教师校正稿' : 'Yigdzin1'} 已导入 ${Object.keys(entries).length} 段。`, 'success');
   }
 
   function status(message, type = '') {
@@ -98,17 +124,17 @@
 
   function currentRow() { return state.rows[state.selected]; }
   function recordFor(id) { return state.records[id] ||= { id, models: {}, final: '' }; }
-  function modelIds() { return [ui.modelAInput.value.trim(), ui.modelBInput.value.trim()]; }
+  function modelIds() { return [ui.modelAInput.value.trim(), ui.modelBInput.value === 'custom' ? ui.customModelBInput.value.trim() : ui.modelBInput.value.trim()]; }
   function validateModels(both = false) {
     const models = modelIds();
-    if (!models[0] || !models[1]) throw new Error('请填写模型 A 和模型 B 的完整模型 ID');
+    if (!models[0] || !models[1]) throw new Error('请分别选择 Gemini 和 GPT 模型');
     if (both && models[0] === models[1]) throw new Error('两个对照模型必须使用不同的模型 ID');
     return models;
   }
 
   function saveSettings() {
     localStorage.setItem(settingsKey, JSON.stringify({
-      endpoint: ui.endpointInput.value.trim(), modelA: ui.modelAInput.value.trim(), modelB: ui.modelBInput.value.trim(),
+      endpoint: ui.endpointInput.value.trim(), modelA: ui.modelAInput.value.trim(), modelB: modelIds()[1],
     }));
     if (state.rows.length) {
       renderEditor(false);
@@ -120,8 +146,12 @@
     try {
       const saved = JSON.parse(localStorage.getItem(settingsKey) || '{}');
       if (saved.endpoint) ui.endpointInput.value = saved.endpoint;
-      if (saved.modelA) ui.modelAInput.value = saved.modelA;
-      if (saved.modelB) ui.modelBInput.value = saved.modelB;
+      if (saved.modelA && [...ui.modelAInput.options].some((option) => option.value === saved.modelA)) ui.modelAInput.value = saved.modelA;
+      if (saved.modelB) {
+        if ([...ui.modelBInput.options].some((option) => option.value === saved.modelB)) ui.modelBInput.value = saved.modelB;
+        else { ui.modelBInput.value = 'custom'; ui.customModelBInput.value = saved.modelB; }
+      }
+      ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom';
     } catch (_) { /* Keep visible defaults. */ }
   }
 
@@ -147,6 +177,7 @@
     state.hash = hash;
     state.name = name;
     state.records = bookId ? {} : Object.fromEntries(stored.map(({ key, ...record }) => [record.id, record]));
+    state.references = { teacher: {}, yigdzin1: {} };
     state.selected = 0;
     state.page = 1;
     state.draftDirty = false;
@@ -154,6 +185,7 @@
     render(true);
     if (bookId) {
       await loadCloudRows(rows.slice(0, 30));
+      await loadReferences();
       render(true);
     }
     status(`已打开 ${name}：${rows.length} 段，${Math.ceil(rows.length / PAGE_SIZE)} 个浏览页。${bookId ? '云端译文已同步。' : '本机译文已恢复。'}`, 'success');
@@ -195,12 +227,16 @@
     ui.segmentTitle.textContent = row.id;
     ui.segmentProgress.textContent = `${state.selected + 1} / ${state.rows.length}`;
     ui.sourceText.textContent = row.text;
-    ui.modelATitle.textContent = `模型 A · ${modelA}`;
-    ui.modelBTitle.textContent = `模型 B · ${modelB}`;
+    ui.modelATitle.textContent = ui.modelAInput.selectedOptions[0]?.textContent || modelA;
+    ui.modelBTitle.textContent = ui.modelBInput.value === 'custom' ? modelB : ui.modelBInput.selectedOptions[0]?.textContent || modelB;
     ui.modelAText.value = record.models[modelA]?.text || '';
     ui.modelBText.value = record.models[modelB]?.text || '';
+    ui.teacherText.value = state.references.teacher[row.id] || '';
+    ui.yigdzin1Text.value = state.references.yigdzin1[row.id] || '';
     ui.useAButton.disabled = !ui.modelAText.value;
     ui.useBButton.disabled = !ui.modelBText.value;
+    ui.useTeacherButton.disabled = !ui.teacherText.value;
+    ui.useYigdzin1Button.disabled = !ui.yigdzin1Text.value;
     if (resetDraft) {
       ui.finalText.value = record.final || '';
       state.draftDirty = false;
@@ -242,10 +278,22 @@
     state.busy = busy;
     [ui.translateAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
     ui.stopButton.disabled = !busy;
-    [ui.fileInput, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.pageInput,
+    [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
       ui.previousPageButton, ui.nextPageButton].forEach((input) => { input.disabled = busy; });
     ui.segmentList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
+  }
+
+  function addAvailableModels(data) {
+    const choices = data.aggregator_config?.unifiedModels;
+    if (!Array.isArray(choices)) return;
+    for (const entry of choices) {
+      const model = typeof entry === 'string' ? entry : entry?.id || entry?.model || '';
+      const select = model.startsWith('gemini:') ? ui.modelAInput : /gpt/i.test(model) ? ui.modelBInput : null;
+      if (!select || [...select.options].some((option) => option.value === model)) continue;
+      const option = new Option(model.replace(/^[^:]+:/, ''), model);
+      select.add(option);
+    }
   }
 
   async function checkHealth() {
@@ -267,6 +315,7 @@
     if (!['model_aggregator', 'model-aggregator', 'aggregator'].includes(provider)) {
       throw new Error(`当前接口使用 ${provider || '未知提供者'}，不支持按模型 ID 切换；请使用模型聚合接口或配置为 model_aggregator 的翻译服务。`);
     }
+    addAvailableModels(data);
     return { ...data, provider };
   }
 
@@ -358,8 +407,8 @@
     finally { state.controller = null; setBusy(false); }
   }
 
-  function useModel(which) {
-    ui.finalText.value = which === 0 ? ui.modelAText.value : ui.modelBText.value;
+  function useCandidate(text) {
+    ui.finalText.value = text;
     state.draftDirty = true;
     ui.saveState.textContent = '未保存';
     void saveFinal().catch(showError);
@@ -369,7 +418,7 @@
     if (!state.rows.length) return;
     if (bookId) await loadCloudRows(state.rows);
     const models = [...new Set([...modelIds(), ...Object.values(state.records).flatMap((record) => Object.keys(record.models || {}))])].filter(Boolean);
-    const content = core.exportTranslationMarkdown(state.rows, state.records, models);
+    const content = core.exportTranslationMarkdown(state.rows, state.records, models, state.references);
     const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
@@ -393,7 +442,8 @@
       });
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
-  [ui.endpointInput, ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('change', saveSettings));
+  [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', saveSettings));
+  ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) renderEditor(false);
   }));
@@ -405,8 +455,12 @@
   ui.translateBButton.addEventListener('click', () => void runOne(1));
   ui.pilotButton.addEventListener('click', () => void runPilot());
   ui.stopButton.addEventListener('click', () => state.controller?.abort());
-  ui.useAButton.addEventListener('click', () => useModel(0));
-  ui.useBButton.addEventListener('click', () => useModel(1));
+  ui.useAButton.addEventListener('click', () => useCandidate(ui.modelAText.value));
+  ui.useBButton.addEventListener('click', () => useCandidate(ui.modelBText.value));
+  ui.useTeacherButton.addEventListener('click', () => useCandidate(ui.teacherText.value));
+  ui.useYigdzin1Button.addEventListener('click', () => useCandidate(ui.yigdzin1Text.value));
+  ui.teacherImport.addEventListener('change', () => void importReference('teacher', ui.teacherImport.files[0]).catch(showError));
+  ui.yigdzin1Import.addEventListener('change', () => void importReference('yigdzin1', ui.yigdzin1Import.files[0]).catch(showError));
   ui.finalText.addEventListener('input', () => { state.draftDirty = true; ui.saveState.textContent = '未保存'; });
   ui.saveFinalButton.addEventListener('click', () => void saveFinal().catch(showError));
   ui.exportButton.addEventListener('click', () => void saveFinal().then(exportAll).catch(showError));

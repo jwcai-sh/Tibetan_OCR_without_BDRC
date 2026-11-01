@@ -26,6 +26,26 @@
     return rows.slice(start, start + size);
   }
 
+  function parseReferenceDocument(text, rows) {
+    const allowed = new Set(rows.map((row) => row.id));
+    const entries = {};
+    let current = '';
+    String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n').forEach((line, index) => {
+      const match = /^\[TB-(\d{4,})\]\s*(.*)$/.exec(line);
+      if (match) {
+        current = `TB-${match[1]}`;
+        if (!allowed.has(current)) throw new Error(`第 ${index + 1} 行的 ${current} 不属于当前原文`);
+        if (Object.hasOwn(entries, current)) throw new Error(`${current} 编号重复`);
+        entries[current] = match[2].trim();
+      } else if (line.trim()) {
+        if (!current) throw new Error(`第 ${index + 1} 行缺少 TB 编号`);
+        entries[current] += `${entries[current] ? '\n' : ''}${line.trim()}`;
+      }
+    });
+    if (!Object.keys(entries).length || Object.values(entries).some((value) => !value)) throw new Error('参考稿没有有效的编号段落');
+    return entries;
+  }
+
   function buildTranslationRequest(row, neighbors, options) {
     const previous = neighbors.previous ? `${neighbors.previous.id} ${neighbors.previous.text}` : '无';
     const next = neighbors.next ? `${neighbors.next.id} ${neighbors.next.text}` : '无';
@@ -78,7 +98,7 @@
     return colon > 0 && requested.slice(colon + 1) === actual;
   }
 
-  function exportTranslationMarkdown(rows, records, models) {
+  function exportTranslationMarkdown(rows, records, models, references = {}) {
     const lines = ['# TB 段落翻译对照', ''];
     rows.forEach((row) => {
       const record = records[row.id] || {};
@@ -86,6 +106,9 @@
       models.forEach((model) => {
         lines.push(`### ${model}`, '', record.models?.[model]?.text || '（未翻译）', '');
       });
+      for (const [kind, label] of [['teacher', '教师校正稿'], ['yigdzin1', 'Yigdzin1']]) {
+        lines.push(`### ${label}`, '', references[kind]?.[row.id] || '（未导入）', '');
+      }
       lines.push('### 人工定稿', '', record.final || '（未定稿）', '');
     });
     return lines.join('\n');
@@ -111,5 +134,5 @@
     return completed;
   }
 
-  return { parseTbDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
+  return { parseTbDocument, parseReferenceDocument, getVirtualPage, buildTranslationRequest, buildAggregatorRequest, modelsMatch, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
 });

@@ -53,6 +53,40 @@ def create_router(storage: Any) -> APIRouter:
         validate_book(book_id)
         return source(book_id)
 
+    def reference_suffix(kind: str) -> str:
+        if kind not in {"teacher", "yigdzin1"}:
+            raise HTTPException(400, "未知的参考稿类型")
+        return f"tb/references/{kind}.json"
+
+    @router.get("/references/{kind}")
+    def get_reference(book_id: str, kind: str) -> dict[str, Any]:
+        validate_book(book_id)
+        return storage.read_json(book_id, reference_suffix(kind))
+
+    @router.put("/references/{kind}")
+    async def put_reference(book_id: str, kind: str, request: Request) -> dict[str, Any]:
+        validate_book(book_id)
+        suffix = reference_suffix(kind)
+        payload = await request.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("entries"), dict):
+            raise HTTPException(400, "参考稿必须按 TB 编号提供")
+        saved_source = source(book_id)
+        if payload.get("source_hash") != saved_source["source_hash"]:
+            raise HTTPException(409, "TB 原文版本不一致，请重新打开书籍")
+        entries = payload["entries"]
+        if not entries or len(entries) > saved_source["segment_count"]:
+            raise HTTPException(400, "参考稿段落数量无效")
+        if len(storage.json.dumps(entries, ensure_ascii=False).encode("utf-8")) > MAX_SOURCE_BYTES:
+            raise HTTPException(413, "参考稿超过 8 MiB")
+        for segment_id, text in entries.items():
+            validate_segment_in_source(book_id, segment_id, saved_source["text"])
+            if not isinstance(text, str) or not text.strip() or len(text.encode("utf-8")) > MAX_RESULT_BYTES:
+                raise HTTPException(400, "参考稿包含无效段落")
+        record = {"source_hash": payload["source_hash"], "name": str(payload.get("name") or f"{kind}.txt")[:200],
+                  "entries": entries, "updated_at": datetime.now(timezone.utc).isoformat()}
+        storage.write_json(book_id, suffix, record)
+        return {"ok": True, "count": len(entries), "updated_at": record["updated_at"]}
+
     @router.put("/source")
     async def put_source(book_id: str, request: Request) -> dict[str, Any]:
         validate_book(book_id)
