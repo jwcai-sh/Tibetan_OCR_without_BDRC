@@ -11,11 +11,11 @@
   const byId = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
     'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
-    'documentTitle', 'documentSummary', 'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
-    'progressOverview', 'progressModelInput', 'progressModelLabel', 'progressPageRangeLabel', 'progressPageSelect',
-    'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'segmentGridTitle', 'segmentGridSummary', 'segmentProgressGrid',
+    'previousPageButton', 'nextPageButton', 'pageInput', 'pageTotal',
+    'progressOverview', 'progressModelInput', 'progressModelLabel', 'progressPageRangeLabel',
+    'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'pageProgressGrid',
     'currentPageProgressText', 'currentPageProgressBar',
-    'segmentList', 'segmentTitle', 'segmentProgress', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
+    'segmentTitle', 'segmentProgress', 'previousSegmentButton', 'nextSegmentButton', 'sourceText', 'translateAButton', 'translateAllAButton', 'translateRemainingAButton', 'translateBButton',
     'pilotButton', 'stopButton', 'exportButton', 'modelATitle', 'modelBTitle', 'modelAText', 'modelBText',
     'useAButton', 'useBButton', 'teacherImport', 'yigdzin1Import', 'teacherText', 'yigdzin1Text',
     'teacherMeta', 'yigdzin1Meta', 'useTeacherButton', 'useYigdzin1Button',
@@ -100,18 +100,6 @@
     ui.progressModelInput.value = String(state.progressSlot);
     const pageCount = Math.ceil(state.rows.length / PAGE_SIZE);
     ui.progressPageRangeLabel.textContent = `页码范围 · 1–${pageCount} 页`;
-    if (ui.progressPageSelect.dataset.sourceHash !== state.hash) {
-      ui.progressPageSelect.replaceChildren(...Array.from({ length: pageCount }, (_, index) => {
-        const page = index + 1;
-        const rows = core.getVirtualPage(state.rows, page, PAGE_SIZE);
-        const option = document.createElement('option');
-        option.value = String(page);
-        option.textContent = `第 ${page} 页 · ${rows[0].id}–${rows.at(-1).id}`;
-        return option;
-      }));
-      ui.progressPageSelect.dataset.sourceHash = state.hash;
-    }
-    ui.progressPageSelect.value = String(state.page);
     const model = modelIds()[state.progressSlot];
     ui.progressModelLabel.textContent = state.progressSlot === 0
       ? ui.modelAInput.selectedOptions[0]?.textContent || model
@@ -121,9 +109,7 @@
       ui.bookProgressText.textContent = '正在统计云端进度…';
       ui.segmentProgressText.textContent = '';
       ui.bookProgressBar.value = 0;
-      ui.segmentGridTitle.textContent = `第 ${state.page} 页 · 段落进度`;
-      ui.segmentGridSummary.textContent = '正在统计…';
-      ui.segmentProgressGrid.replaceChildren();
+      ui.pageProgressGrid.replaceChildren();
       ui.currentPageProgressText.textContent = '正在统计当前页…';
       ui.currentPageProgressBar.value = 0;
       return;
@@ -139,19 +125,17 @@
     ui.currentPageProgressText.textContent = `第 ${state.page} 页：${current.completed} / ${current.total} 段（${Math.round(100 * current.completed / current.total)}%）`;
     ui.currentPageProgressBar.max = current.total;
     ui.currentPageProgressBar.value = current.completed;
-    ui.segmentGridTitle.textContent = `第 ${state.page} 页 · 段落进度`;
-    ui.segmentGridSummary.textContent = `${current.completed} / ${current.total} 段已译`;
-    const start = (state.page - 1) * PAGE_SIZE;
-    ui.segmentProgressGrid.replaceChildren(...core.getVirtualPage(state.rows, state.page, PAGE_SIZE).map((row, offset) => {
+    ui.pageProgressGrid.replaceChildren(...progress.pages.map((page) => {
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = row.id;
-      button.className = `${completed.has(row.id) ? 'translated' : ''}${start + offset === state.selected ? ' current' : ''}`.trim();
-      button.title = `${row.id} · ${completed.has(row.id) ? '已译' : '未译'} · 点击定位`;
+      button.textContent = String(page.page);
+      button.className = page.page === state.page ? 'current' : '';
+      button.style.setProperty('--fill', `${Math.round(100 * page.completed / page.total)}%`);
+      button.title = `第 ${page.page} 页：${page.completed} / ${page.total} 段（${Math.round(100 * page.completed / page.total)}%）`;
       button.setAttribute('aria-label', button.title);
-      button.setAttribute('aria-current', start + offset === state.selected ? 'true' : 'false');
+      button.setAttribute('aria-current', page.page === state.page ? 'page' : 'false');
       button.disabled = state.busy;
-      button.addEventListener('click', () => void showSegment(start + offset).catch(showError));
+      button.addEventListener('click', () => void goPage(page.page).catch(showError));
       return button;
     }));
   }
@@ -308,31 +292,15 @@
   }
 
   function render(resetDraft = false) {
-    ui.documentTitle.textContent = state.name;
-    const models = modelIds();
-    const completed = completedIdsFor(models[state.progressSlot]);
-    ui.documentSummary.textContent = `${state.rows.length} 段 · 当前模型已译 ${completed?.size ?? '统计中'}`;
     const count = Math.ceil(state.rows.length / PAGE_SIZE);
     ui.pageInput.max = String(count);
     ui.pageInput.value = String(state.page);
     ui.pageTotal.textContent = `/ ${count}`;
     ui.previousPageButton.disabled = state.busy || state.page <= 1;
     ui.nextPageButton.disabled = state.busy || state.page >= count;
+    ui.previousSegmentButton.disabled = state.busy || state.selected <= 0;
+    ui.nextSegmentButton.disabled = state.busy || state.selected >= state.rows.length - 1;
     updateGeminiBatchControls();
-    ui.segmentList.replaceChildren(...core.getVirtualPage(state.rows, state.page, PAGE_SIZE).map((row) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = `segment-item${row.id === currentRow().id ? ' active' : ''}`;
-      button.disabled = state.busy;
-      const label = document.createElement('strong');
-      label.textContent = row.id;
-      const stateLabel = document.createElement('small');
-      const record = state.records[row.id];
-      stateLabel.textContent = record?.final?.trim() ? '已定稿' : models.every((model) => record?.models?.[model]?.text) ? '双模型已译' : '待处理';
-      button.append(label, stateLabel);
-      button.addEventListener('click', () => void showSegment(state.rows.indexOf(row)).catch(showError));
-      return button;
-    }));
     renderProgress();
     renderEditor(resetDraft);
   }
@@ -396,10 +364,8 @@
     [ui.translateAButton, ui.translateAllAButton, ui.translateRemainingAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
     ui.stopButton.disabled = !busy;
     [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
-      ui.previousPageButton, ui.nextPageButton].forEach((input) => { input.disabled = busy; });
-    ui.segmentList.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
-    ui.progressPageSelect.disabled = busy;
-    ui.segmentProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
+      ui.previousPageButton, ui.nextPageButton, ui.previousSegmentButton, ui.nextSegmentButton].forEach((input) => { input.disabled = busy; });
+    ui.pageProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
   }
 
@@ -622,7 +588,6 @@
     render(false);
     if (bookId && !completedIdsFor(modelIds()[state.progressSlot])) void loadCloudProgress().catch(showError);
   });
-  ui.progressPageSelect.addEventListener('change', () => void goPage(Number(ui.progressPageSelect.value)).catch(showError));
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });
   [ui.modelAInput, ui.modelBInput].forEach((input) => input.addEventListener('input', () => {
     if (state.rows.length) {
@@ -634,7 +599,22 @@
   ui.healthButton.addEventListener('click', () => void checkHealth().then((data) => status(`翻译服务已就绪：${data.provider || ''} ${data.model || ''}`, 'success')).catch(showError));
   ui.previousPageButton.addEventListener('click', () => void goPage(state.page - 1).catch(showError));
   ui.nextPageButton.addEventListener('click', () => void goPage(state.page + 1).catch(showError));
-  ui.pageInput.addEventListener('change', () => void goPage(Number(ui.pageInput.value)).catch(showError));
+  let pageNavigationPending = false;
+  async function navigateFromPageInput() {
+    if (pageNavigationPending || Number(ui.pageInput.value) === state.page) return;
+    pageNavigationPending = true;
+    try { await goPage(Number(ui.pageInput.value)); }
+    catch (error) { ui.pageInput.value = String(state.page); showError(error); }
+    finally { pageNavigationPending = false; }
+  }
+  ui.pageInput.addEventListener('change', () => void navigateFromPageInput());
+  ui.pageInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void navigateFromPageInput();
+  });
+  ui.previousSegmentButton.addEventListener('click', () => void showSegment(state.selected - 1).catch(showError));
+  ui.nextSegmentButton.addEventListener('click', () => void showSegment(state.selected + 1).catch(showError));
   ui.translateAButton.addEventListener('click', () => void runOne(0));
   ui.translateAllAButton.addEventListener('click', () => void runGeminiBatch('all'));
   ui.translateRemainingAButton.addEventListener('click', () => void runGeminiBatch('remaining'));
