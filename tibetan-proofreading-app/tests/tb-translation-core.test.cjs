@@ -79,6 +79,14 @@ test('model progress counts completed pages and partial final page independently
   ]);
 });
 
+test('page progress navigation targets the first untranslated paragraph on that page', () => {
+  const rows = Array.from({ length: 32 }, (_, i) => ({ id: `TB-${String(i + 1).padStart(4, '0')}` }));
+  const completed = new Set(rows.slice(15, 20).map((row) => row.id));
+  assert.equal(core.getPageNavigationIndex(rows, completed, 2, 15), 20);
+  assert.equal(core.getPageNavigationIndex(rows, new Set(rows.map((row) => row.id)), 2, 15), 15);
+  assert.equal(core.getPageNavigationIndex(rows, completed, 4, 15), -1);
+});
+
 test('translation request uses only selected paragraph as source and keeps neighbor context separate', () => {
   const request = core.buildTranslationRequest(
     { id: 'TB-0002', text: 'ཁ།' },

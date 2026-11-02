@@ -6,9 +6,9 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <title>TB 段落翻译对照 · Gemini / GPT / 教师校正稿 / Yigdzin1</title>
   <script>if (new URLSearchParams(location.search).get('embedded') === '1') document.documentElement.classList.add('tb-embedded');</script>
-  <link rel="stylesheet" href="./tb-translation.css?v=20261101-tb-compact-navigation">
-  <script src="./tb-translation-core.js?v=20261101-tb-progress" defer></script>
-  <script src="./tb-translation.js?v=20261101-tb-compact-navigation" defer></script>
+  <link rel="stylesheet" href="./tb-translation.css?v=20261102-hide-endpoint">
+  <script src="./tb-translation-core.js?v=20261102-untranslated-page-jump" defer></script>
+  <script src="./tb-translation.js?v=20261102-untranslated-page-jump" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -16,7 +16,7 @@
     <label id="sourceImportControl" class="file-button" hidden>导入编号 TXT<input id="fileInput" type="file" accept=".txt,text/plain"></label>
   </header>
   <main>
-    <section class="settings" aria-label="翻译设置">
+    <section class="settings" aria-label="翻译设置" hidden>
       <label>翻译接口<input id="endpointInput" type="url" value="http://127.0.0.1:8890/api/aggregate/chat" spellcheck="false"></label>
       <button id="healthButton" type="button">检查翻译接口</button>
     </section>

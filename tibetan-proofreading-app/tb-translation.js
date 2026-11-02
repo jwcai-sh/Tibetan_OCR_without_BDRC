@@ -132,16 +132,21 @@
     ui.currentPageProgressBar.max = current.total;
     ui.currentPageProgressBar.value = current.completed;
     ui.pageProgressGrid.replaceChildren(...progress.pages.map((page) => {
+      const targetIndex = core.getPageNavigationIndex(state.rows, completed, page.page, PAGE_SIZE);
+      const target = state.rows[targetIndex];
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = String(page.page);
       button.className = page.page === state.page ? 'current' : '';
       button.style.setProperty('--fill', `${Math.round(100 * page.completed / page.total)}%`);
-      button.title = `第 ${page.page} 页：${page.completed} / ${page.total} 段（${Math.round(100 * page.completed / page.total)}%）`;
+      const jumpHint = page.completed < page.total
+        ? `点击跳到本页第一个未译段 ${target?.id || ''}`
+        : '本页已全部翻译，点击查看本页首段';
+      button.title = `第 ${page.page} 页：${page.completed} / ${page.total} 段（${Math.round(100 * page.completed / page.total)}%）；${jumpHint}`;
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-current', page.page === state.page ? 'page' : 'false');
       button.disabled = state.busy;
-      button.addEventListener('click', () => void goPage(page.page).catch(showError));
+      button.addEventListener('click', () => void showSegment(targetIndex).catch(showError));
       return button;
     }));
   }

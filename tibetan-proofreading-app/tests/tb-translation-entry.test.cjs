@@ -76,3 +76,9 @@ test('the TB comparison retains the Gemini model selector', () => {
   assert.match(html, /<select id="modelAInput"[^>]*><option value="gemini:gemini-4-argon">Gemini 4 Argon<\/option><option value="gemini:gemini-3\.8-flash">Gemini 3\.8 Flash<\/option>/);
   assert.match(html, /<option value="gemini:gemini-3\.8-flash">/);
 });
+
+test('translation endpoint settings stay available to the app but hidden from the page', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../tb-translation.html'), 'utf8');
+  assert.match(html, /<section class="settings" aria-label="翻译设置" hidden>/);
+  assert.match(html, /id="endpointInput"/);
+});

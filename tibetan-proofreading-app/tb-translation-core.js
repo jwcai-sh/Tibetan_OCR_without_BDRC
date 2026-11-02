@@ -62,6 +62,17 @@
     return { completedSegments, completedPages: pages.filter((page) => page.completed === page.total).length, pages };
   }
 
+  function getPageNavigationIndex(rows, completedIds, page, size = 15) {
+    const start = (Math.trunc(page) - 1) * size;
+    if (!Number.isInteger(page) || page < 1 || start >= rows.length || size < 1) return -1;
+    const completed = completedIds instanceof Set ? completedIds : new Set(completedIds || []);
+    const end = Math.min(rows.length, start + size);
+    for (let index = start; index < end; index += 1) {
+      if (!completed.has(rows[index].id)) return index;
+    }
+    return start;
+  }
+
   function parseReferenceDocument(text, rows) {
     const allowed = new Set(rows.map((row) => row.id));
     const entries = {};
@@ -180,5 +191,5 @@
     return completed;
   }
 
-  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, calculateModelProgress, buildTranslationRequest, buildAggregatorRequest, modelsMatch, selectModelBatchRows, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
+  return { parseTbDocument, ensureBookTbSource, parseReferenceDocument, getVirtualPage, calculateModelProgress, getPageNavigationIndex, buildTranslationRequest, buildAggregatorRequest, modelsMatch, selectModelBatchRows, extractTranslation, exportTranslationMarkdown, runTranslationBatch };
 });
