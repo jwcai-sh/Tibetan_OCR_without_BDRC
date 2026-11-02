@@ -81,8 +81,12 @@
     const candidate = pages?.[key]?.[String(page)] || '';
     if (!candidate) return [];
     const reference = pages?.[baselineKey]?.[String(page)] || '';
-    if (key === baselineKey || !reference) return [{ type: 'plain', text: candidate }];
+    if (key === baselineKey || !String(reference).trim()) return [{ type: 'plain', text: candidate }];
     return diffSegments(reference, candidate);
+  }
+
+  function hasAnyModelText(pages, key) {
+    return Object.values(pages?.[key] || {}).some(value => String(value || '').trim());
   }
 
   function normalizeModelOrder(order) {
@@ -130,7 +134,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -215,10 +219,10 @@
 
   function renderBaselineInfo() {
     const label = modelLabel(state.baselineKey);
-    const hasReference = Boolean(state.pages[state.baselineKey]?.[String(state.page)]);
+    const hasReference = Boolean(String(state.pages[state.baselineKey]?.[String(state.page)] || '').trim());
     $('baselineDescription').textContent = hasReference
-      ? `以 ${label} 为差异基准。`
-      : `${label} 本页无识别文本，暂停差异高亮。`;
+      ? `全书差异基准：${label}。切换页码时保持。`
+      : `全书差异基准：${label}。该模型本页无识别文本，暂不标差异。`;
     $('diffHint').textContent = hasReference
       ? `黄色表示候选比 ${label} 多识或写法不同；橙色短线表示候选漏识。`
       : '基准模型本页无识别文本，因此不标记差异。';
@@ -228,12 +232,14 @@
     const panel = $(`${key}Panel`);
     const container = $(`${key}Text`);
     container.replaceChildren();
-    panel.querySelector('.model-label').textContent = `${modelLabel(key)}${key === state.baselineKey ? ' · 差异基准' : ''}`;
+    panel.querySelector('.model-label').textContent = modelLabel(key);
     panel.classList.toggle('is-baseline', key === state.baselineKey);
-    panel.querySelector('.set-baseline').setAttribute('aria-pressed', String(key === state.baselineKey));
+    const baselineButton = panel.querySelector('.set-baseline');
+    baselineButton.setAttribute('aria-pressed', String(key === state.baselineKey));
+    baselineButton.textContent = key === state.baselineKey ? '当前全书基准' : '设为全书基准';
     const text = state.pages[key]?.[String(state.page)] || '';
     panel.querySelector('.fill-corrected').disabled = !text;
-    panel.querySelector('.set-baseline').disabled = !text;
+    baselineButton.disabled = !hasAnyModelText(state.pages, key);
     if (!text) {
       container.textContent = key === 'yigdzin1' ? '本页无藏文识别结果。' : '本页尚无识别结果。';
       container.classList.add('missing');
@@ -567,11 +573,11 @@
       if (button.classList.contains('fill-corrected') && text) {
         $('correctedText').value = text;
         $('correctedText').dispatchEvent(new Event('input'));
-      } else if (button.classList.contains('set-baseline') && text && key !== state.baselineKey) {
+      } else if (button.classList.contains('set-baseline') && hasAnyModelText(state.pages, key) && key !== state.baselineKey) {
         state.baselineKey = key;
         try { root.localStorage.setItem(baselineKey, key); } catch { /* Session selection still works. */ }
         renderAllCandidates();
-        feedback(`已将 ${modelLabel(key)} 设为差异基准；正确版内容未修改。`);
+        feedback(`已将 ${modelLabel(key)} 设为本书所有页的差异基准；正确版内容未修改。`);
       }
     });
     cards.addEventListener('dragstart', event => {

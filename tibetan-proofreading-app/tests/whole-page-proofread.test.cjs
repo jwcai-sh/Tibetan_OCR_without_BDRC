@@ -2,7 +2,13 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, candidateSegments, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+
+test('a whole-book baseline remains selectable when only another page has model text', () => {
+  const pages = { teacher: { '1': '', '2': 'ཀ་ཁ' }, yigdzin1: { '1': '  ' } };
+  assert.equal(hasAnyModelText(pages, 'teacher'), true);
+  assert.equal(hasAnyModelText(pages, 'yigdzin1'), false);
+});
 
 test('selected model is the only unmarked baseline and missing baselines do not mark differences', () => {
   const pages = { gemini4: { '1': 'ཀ་ཁ' }, teacher: { '1': 'ཀ་ག་ཁ' }, yigdzin1: { '1': 'ཀ་ཁ' } };
@@ -10,6 +16,7 @@ test('selected model is the only unmarked baseline and missing baselines do not 
   assert.equal(candidateSegments(pages, 'teacher', 'gemini4', 1).some(piece => piece.type !== 'plain'), true);
   assert.deepEqual(candidateSegments(pages, 'yigdzin1', 'teacher', 2), []);
   assert.deepEqual(candidateSegments(pages, 'openai', 'teacher', 1), [{ type: 'plain', text: 'ཀ་ག་ཁ' }]);
+  assert.deepEqual(candidateSegments({ teacher: { '1': '  ' }, gemini4: { '1': 'ཀ་ཁ' } }, 'teacher', 'gemini4', 1), [{ type: 'plain', text: 'ཀ་ཁ' }]);
 });
 
 test('saved card order keeps each model once and restores omitted models', () => {
