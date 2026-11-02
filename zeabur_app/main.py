@@ -49,6 +49,7 @@ OSS_PREFIX = env("OSS_PREFIX", "tibetan-proofreading").strip("/")
 LIBRARY_PREFIX = "待识别文档/"
 LIBRARY_PASSWORD = env("LIBRARY_PASSWORD") or env("PASSWORD")
 LIBRARY_LIMIT = 1000
+_library_file_lock = threading.Lock()
 MAX_UPLOAD_BYTES = int(env("MAX_UPLOAD_BYTES", str(200 * 1024 * 1024)))
 LOCAL_WORKBENCH_ORIGINS = {"http://127.0.0.1:8790", "http://localhost:8790"}
 LIBRARY_FILE_EXTENSIONS = {
@@ -177,7 +178,7 @@ app = FastAPI(title="Tibetan OCR Proofreading Workbench", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://tibetan-ocr-without-bdrc.zeabur.app", *sorted(LOCAL_WORKBENCH_ORIGINS)],
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["Accept-Ranges", "Content-Disposition", "Content-Length", "Content-Range"],
 )
@@ -264,6 +265,7 @@ def list_library(request: Request, authorization: str = Header(default="")) -> d
             items.append({
                 "path": relative_path,
                 "size": int(getattr(obj, "size", 0) or 0),
+                "etag": str(getattr(obj, "etag", "") or "").strip('"'),
                 "updated_at": datetime.fromtimestamp(modified, timezone.utc).isoformat() if isinstance(modified, (int, float)) else str(modified or ""),
             })
     except oss2.exceptions.OssError as exc:
@@ -291,14 +293,14 @@ def library_upload_error(exc: Exception, stage: str) -> HTTPException:
         stage, status, code, request_id,
     )
     if code == "AccessDenied":
-        action = "写入" if stage == "put" else "读取文件信息"
+        action = "删除" if stage == "delete" else "写入" if stage == "put" else "读取文件信息"
         message = f"OSS 拒绝{action}，请管理员检查待识别文档目录的权限"
     elif code in {"InvalidAccessKeyId", "SignatureDoesNotMatch", "SecurityTokenExpired"}:
         message = "OSS 身份认证失败，请管理员检查服务端凭据配置"
     elif code in {"RequestTimeout", "ConnectionTimeout", "ReadTimeout", "RequestError"}:
         message = "连接 OSS 失败或超时，请稍后重试"
     else:
-        message = "上传到云端失败" if stage == "put" else "无法确认云端文件是否重名"
+        message = "删除云端文件失败" if stage.startswith("delete") else "上传到云端失败" if stage == "put" else "无法确认云端文件是否重名"
     detail = f"{message}（错误码：{code}"
     if request_id:
         detail += f"；请求编号：{request_id}"
@@ -337,29 +339,71 @@ async def upload_library_file(request: Request, authorization: str = Header(defa
             content_type = "text/plain; charset=utf-8"
         elif extension in {".md", ".markdown"}:
             content_type = "text/markdown; charset=utf-8"
+        with _library_file_lock:
+            bucket = oss_bucket()
+            try:
+                bucket.head_object(source_key)
+            except oss2.exceptions.NoSuchKey:
+                pass
+            except Exception as exc:
+                raise library_upload_error(exc, "head") from exc
+            else:
+                raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试")
+            try:
+                bucket.put_object(
+                    source_key, file.file,
+                    headers={"Content-Type": content_type, "x-oss-forbid-overwrite": "true"},
+                )
+            except oss2.exceptions.ObjectAlreadyExists as exc:
+                raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
+            except oss2.exceptions.ServerError as exc:
+                if getattr(exc, "status", None) in (409, 412):
+                    raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
+                raise library_upload_error(exc, "put") from exc
+            except Exception as exc:
+                raise library_upload_error(exc, "put") from exc
+    return {"ok": True, "path": relative_path, "size": size, "content_type": content_type}
+
+
+@app.delete("/api/library/file")
+async def delete_library_file(request: Request, authorization: str = Header(default="")) -> dict[str, Any]:
+    if not collaboration.configured():
+        require_library_access(authorization)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "删除请求必须是 JSON object")
+    relative_path = payload.get("path", "")
+    source_key = library_object_key(relative_path)
+    expected_size = payload.get("size")
+    expected_etag = payload.get("etag")
+    if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
+        raise HTTPException(400, "文件大小无效，请刷新目录后重试")
+    if not isinstance(expected_etag, str) or not expected_etag:
+        raise HTTPException(400, "文件版本无效，请刷新目录后重试")
+    with _library_file_lock:
         bucket = oss_bucket()
         try:
-            bucket.head_object(source_key)
-        except oss2.exceptions.NoSuchKey:
-            pass
+            source = bucket.head_object(source_key)
+        except oss2.exceptions.NoSuchKey as exc:
+            raise HTTPException(404, "文件已不存在，请刷新目录") from exc
         except Exception as exc:
-            raise library_upload_error(exc, "head") from exc
-        else:
-            raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试")
+            raise library_upload_error(exc, "delete-head") from exc
+        if int(source.content_length) != expected_size or str(source.etag or "").strip('"') != expected_etag:
+            raise HTTPException(409, "文件已更新，请刷新目录后重新确认")
         try:
-            bucket.put_object(
-                source_key, file.file,
-                headers={"Content-Type": content_type, "x-oss-forbid-overwrite": "true"},
-            )
-        except oss2.exceptions.ObjectAlreadyExists as exc:
-            raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
-        except oss2.exceptions.ServerError as exc:
-            if getattr(exc, "status", None) in (409, 412):
-                raise HTTPException(409, "此文件夹中已存在同名文件，请重命名后重试") from exc
-            raise library_upload_error(exc, "put") from exc
+            bucket.delete_object(source_key)
         except Exception as exc:
-            raise library_upload_error(exc, "put") from exc
-    return {"ok": True, "path": relative_path, "size": size, "content_type": content_type}
+            raise library_upload_error(exc, "delete") from exc
+        index_name = hashlib.sha256(source_key.encode("utf-8")).hexdigest() + ".json"
+        try:
+            bucket.delete_object(object_key("_library-index", index_name))
+        except Exception as exc:
+            logging.warning("library_index_cleanup_failed path=%s error=%s", relative_path, type(exc).__name__)
+            raise HTTPException(502, "云端文件已删除，但项目索引清理失败；请联系管理员后再上传同名文件") from exc
+    with _pdf_page_render_lock:
+        _cached_pdf_page_preview.cache_clear()
+        cached_pdf_source.cache_clear()
+    return {"ok": True, "path": relative_path}
 
 
 @app.post("/api/library/open")

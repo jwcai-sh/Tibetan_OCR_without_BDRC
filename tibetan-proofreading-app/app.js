@@ -1,6 +1,6 @@
 const SAMPLE_PDF_URL = "../藏文/天文历算学-本科教材 藏文40301698_部分.pdf";
 const PDF_WORKER_URL = "./vendor/pdf.worker.min.js";
-const APP_BUILD_ID = "20261026-cloud-state-load-v27";
+const APP_BUILD_ID = "20261102-cloud-library-delete";
 let pageReviewPending = false;
 const REVIEW_MODEL_DEFAULTS = { qwen: ["qwen3.8-max"], gemini: ["gemini-3.8-flash", "gemini-3.1-flash-lite"] };
 let geminiRowModels = [...REVIEW_MODEL_DEFAULTS.gemini];
@@ -2101,9 +2101,43 @@ function makeCloudLibraryRow(name, icon, date, kind, onClick, size = "—", file
       button.addEventListener("click", () => void openCloudLibraryFile(file, workflow));
       actions.appendChild(button);
     }
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "finder-row-delete";
+    deleteButton.textContent = "删除";
+    deleteButton.setAttribute("aria-label", `删除云端文件：${file.path}`);
+    deleteButton.addEventListener("click", () => void deleteCloudLibraryFile(file, deleteButton));
+    actions.appendChild(deleteButton);
     row.appendChild(actions);
   }
   return row;
+}
+
+async function deleteCloudLibraryFile(file, button) {
+  if (button.disabled) return;
+  if (!window.confirm(`确认永久删除云端文件“${file.path}”？\n已打开的校对项目将无法读取这份源文件。此操作不能撤销。`)) return;
+  button.disabled = true;
+  setCloudLibraryStatus(`正在删除“${file.path}”…`);
+  try {
+    const headers = { "Content-Type": "application/json", ...(cloudLibrary.authMode === "legacy" ? { Authorization: `Bearer ${cloudLibrary.token}` } : {}) };
+    if (isLocalWorkbench() && cloudLibrary.accessToken) headers.Authorization = `Bearer ${cloudLibrary.accessToken}`;
+    const response = await fetchWithCloudTimeout(`${cloudLibrary.apiBaseUrl || cloudLibraryApiOrigin()}/api/library/file`, {
+      method: "DELETE",
+      credentials: isCloudDeployment() ? "same-origin" : "omit",
+      headers,
+      body: JSON.stringify({ path: file.path, size: file.size, etag: file.etag }),
+    }, 60000);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
+    cloudLibrary.items = cloudLibrary.items.filter(item => item.path !== file.path);
+    els.cloudLibraryCount.textContent = `${cloudLibrary.items.length} 项`;
+    renderCloudLibraryRows();
+    setCloudLibraryStatus(`已删除云端文件“${file.path}”。`);
+  } catch (error) {
+    setCloudLibraryStatus(`删除“${file.path}”失败：${error.message || error}`, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function formatCloudLibrarySize(bytes) {

@@ -1,6 +1,9 @@
 import json
 import io
 import struct
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from threading import Event
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -53,7 +56,10 @@ class FakeBucket:
     def head_object(self, key):
         if key not in self.objects:
             raise oss2.exceptions.NoSuchKey(404, {}, b"", {})
-        return SimpleNamespace(content_length=len(self.objects[key]))
+        return SimpleNamespace(content_length=len(self.objects[key]), etag=hashlib.md5(self.objects[key]).hexdigest())
+
+    def delete_object(self, key):
+        self.objects.pop(key, None)
 
 
 class CloudLibraryTest(unittest.TestCase):
@@ -66,6 +72,10 @@ class CloudLibraryTest(unittest.TestCase):
         self.password_patch.start()
         self.addCleanup(self.bucket_patch.stop)
         self.addCleanup(self.password_patch.stop)
+
+    def delete_payload(self, path="经书/第一册.pdf"):
+        body = self.bucket.objects[f"待识别文档/{path}"]
+        return {"path": path, "size": len(body), "etag": hashlib.md5(body).hexdigest()}
 
     def test_whole_page_uses_pdf_count_and_rotates_tall_preview_on_request(self):
         document = fitz.open()
@@ -109,14 +119,117 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertAlmostEqual(before_y + after_y, lh, delta=lh * 0.1)
 
     def test_listing_requires_password_and_uses_only_library_prefix(self):
-        objects = [SimpleNamespace(key="待识别文档/经书/第一册.pdf", size=9,
+        objects = [SimpleNamespace(key="待识别文档/经书/第一册.pdf", size=9, etag="old-etag",
                                    last_modified=datetime(2026, 10, 12, tzinfo=timezone.utc).timestamp())]
         self.assertEqual(self.client.get("/api/library").status_code, 401)
         with patch.object(main.oss2, "ObjectIterator", return_value=iter(objects)) as iterator:
             response = self.client.get("/api/library", headers={"Authorization": "Bearer test-library-password"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["items"][0]["path"], "经书/第一册.pdf")
+        self.assertEqual(response.json()["items"][0]["etag"], "old-etag")
         self.assertEqual(iterator.call_args.kwargs["prefix"], "待识别文档/")
+
+    def test_delete_requires_access_and_removes_only_the_selected_library_file(self):
+        self.bucket.objects["待识别文档/经书/保留.pdf"] = b"keep"
+        self.bucket.objects["tibetan-proofreading/books/keep/state.json"] = b"{}"
+        url = "/api/library/file"
+        payload = self.delete_payload()
+        self.assertEqual(self.client.request("DELETE", url, json=payload).status_code, 401)
+        response = self.client.request("DELETE", url, headers={"Authorization": "Bearer test-library-password"}, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["path"], "经书/第一册.pdf")
+        self.assertNotIn("待识别文档/经书/第一册.pdf", self.bucket.objects)
+        self.assertIn("待识别文档/经书/保留.pdf", self.bucket.objects)
+        self.assertIn("tibetan-proofreading/books/keep/state.json", self.bucket.objects)
+
+    def test_delete_allows_local_workbench_cors_preflight(self):
+        response = self.client.options("/api/library/file", headers={
+            "Origin": "http://127.0.0.1:8790",
+            "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["access-control-allow-origin"], "http://127.0.0.1:8790")
+        self.assertIn("DELETE", response.headers["access-control-allow-methods"])
+
+    def test_delete_rejects_invalid_missing_or_changed_file(self):
+        url = "/api/library/file"
+        headers = {"Authorization": "Bearer test-library-password"}
+        for path in ("../books/state.json", "/经书/第一册.pdf", "经书/../第一册.pdf"):
+            self.assertEqual(self.client.request("DELETE", url, headers=headers, json={"path": path, "size": 9, "etag": "old-etag"}).status_code, 400)
+        self.assertEqual(self.client.request("DELETE", url, headers=headers, json={"path": "经书/没有.pdf", "size": 9, "etag": "old-etag"}).status_code, 404)
+        self.assertEqual(self.client.request("DELETE", url, headers=headers, json={**self.delete_payload(), "size": 8}).status_code, 409)
+        self.assertIn("待识别文档/经书/第一册.pdf", self.bucket.objects)
+
+    def test_delete_rejects_stale_etag_even_when_new_file_has_same_size(self):
+        old = self.delete_payload()
+        self.bucket.objects["待识别文档/经书/第一册.pdf"] = b"new-file!"
+        response = self.client.request("DELETE", "/api/library/file", headers={"Authorization": "Bearer test-library-password"}, json=old)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.bucket.objects["待识别文档/经书/第一册.pdf"], b"new-file!")
+
+    def test_delete_reports_oss_failure_without_exposing_details(self):
+        with patch.object(self.bucket, "delete_object", side_effect=RuntimeError("secret-internal-detail")):
+            response = self.client.request("DELETE", "/api/library/file", headers={"Authorization": "Bearer test-library-password"}, json=self.delete_payload())
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("删除", response.json()["detail"])
+        self.assertNotIn("secret-internal-detail", response.text)
+        self.assertIn("待识别文档/经书/第一册.pdf", self.bucket.objects)
+
+    def test_delete_invalidates_cached_page_preview(self):
+        document = fitz.open()
+        document.new_page(width=100, height=100)
+        content = document.tobytes()
+        document.close()
+        self.bucket.objects["待识别文档/经书/第一册.pdf"] = content
+        main.cached_pdf_source.cache_clear()
+        main._cached_pdf_page_preview.cache_clear()
+        headers = {"Authorization": "Bearer test-library-password"}
+        book_id = self.client.post("/api/library/open", headers=headers, json={"path": "经书/第一册.pdf"}).json()["book_id"]
+        preview_url = f"/api/books/{book_id}/pages/1/preview?dpi=72"
+        self.assertEqual(self.client.get(preview_url).status_code, 200)
+        self.assertEqual(self.client.request("DELETE", "/api/library/file", headers=headers, json=self.delete_payload()).status_code, 200)
+        self.assertEqual(self.client.get(preview_url).status_code, 404)
+
+    def test_reupload_after_delete_creates_a_new_project_without_erasing_old_state(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        path = "经书/第一册.pdf"
+        first = self.client.post("/api/library/open", headers=headers, json={"path": path}).json()
+        main.write_json(first["book_id"], "state.json", {"page_count": 1, "ocr_results": {"1": {"text": "旧校对"}}})
+        self.assertEqual(self.client.request("DELETE", "/api/library/file", headers=headers, json=self.delete_payload()).status_code, 200)
+        uploaded = self.client.post("/api/library/upload", headers=headers, files={"file": ("第一册.pdf", b"%PDF-new-version", "application/pdf")}, data={"path": "经书"})
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        second = self.client.post("/api/library/open", headers=headers, json={"path": path}).json()
+        self.assertNotEqual(second["book_id"], first["book_id"])
+        self.assertEqual(second["size"], len(b"%PDF-new-version"))
+        self.assertEqual(main.read_json(first["book_id"], "state.json")["ocr_results"]["1"]["text"], "旧校对")
+
+    def test_upload_waits_for_inflight_delete_before_reusing_same_path(self):
+        headers = {"Authorization": "Bearer test-library-password"}
+        source_key = "待识别文档/经书/第一册.pdf"
+        entered = Event()
+        release = Event()
+        real_delete = self.bucket.delete_object
+
+        def delayed_delete(key):
+            if key == source_key:
+                entered.set()
+                if not release.wait(3):
+                    raise TimeoutError("test did not release deletion")
+            return real_delete(key)
+
+        with patch.object(self.bucket, "delete_object", side_effect=delayed_delete), ThreadPoolExecutor(max_workers=2) as executor:
+            deleting = executor.submit(lambda: TestClient(main.app).request("DELETE", "/api/library/file", headers=headers, json=self.delete_payload()))
+            self.assertTrue(entered.wait(2))
+            uploading = executor.submit(lambda: TestClient(main.app).post("/api/library/upload", headers=headers, files={"file": ("第一册.pdf", b"new-file!", "application/pdf")}, data={"path": "经书"}))
+            try:
+                with self.assertRaises(FutureTimeout):
+                    uploading.result(timeout=0.2)
+            finally:
+                release.set()
+            self.assertEqual(deleting.result(timeout=3).status_code, 200)
+            self.assertEqual(uploading.result(timeout=3).status_code, 200)
+        self.assertEqual(self.bucket.objects[source_key], b"new-file!")
 
     def test_disabled_oss_account_is_reported_in_directory(self):
         error = oss2.exceptions.ServerError(403, {"x-oss-request-id": "test-request"}, b"", {

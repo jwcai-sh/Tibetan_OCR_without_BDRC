@@ -128,7 +128,7 @@ test('OSS file row exposes separate OCR and translation actions', () => {
   const row = context.makeCloudLibraryRow('source.pdf', 'file-text', 'today', 'PDF 文稿', null, '1 MB', { path: 'source.pdf' });
   assert.equal(row.tag, 'div');
   const buttons = row.children.at(-1).children;
-  assert.deepEqual(buttons.map(button => button.textContent), ['OCR 校对', '藏译中']);
+  assert.deepEqual(buttons.map(button => button.textContent), ['OCR 校对', '藏译中', '删除']);
   buttons[0].onClick();
   buttons[1].onClick();
   assert.deepEqual(opened, [['source.pdf', 'ocr'], ['source.pdf', 'translation']]);
