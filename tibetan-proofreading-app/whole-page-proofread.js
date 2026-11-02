@@ -7,7 +7,26 @@
   function parsePageTextFile(source, pageCount) {
     const text = String(source || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
     const headings = [...text.matchAll(/^[^\n]*?第[ \t]*([0-9０-９]+)[ \t]*页[^\n]*$/gm)];
-    if (!headings.length) throw new Error('未找到“第…页”页标');
+    if (!headings.length) {
+      if (!text.trim()) throw new Error('TXT 没有可导入的文字');
+      const fileHeadings = [...text.matchAll(/^【([^【】\n]+\.pdf)】[ \t]*$/gim)];
+      if (fileHeadings.length > 1) {
+        if (fileHeadings.length !== pageCount || text.slice(0, fileHeadings[0].index).trim()
+          || fileHeadings.some(heading => heading[1].toLowerCase() !== fileHeadings[0][1].toLowerCase())) {
+          throw new Error(`检测到 ${fileHeadings.length} 个 PDF 段首，与当前 ${pageCount} 页不一致；请核对是否为同一本书`);
+        }
+        return Object.fromEntries(fileHeadings.map((heading, index) => [
+          String(index + 1),
+          text.slice(heading.index, fileHeadings[index + 1]?.index ?? text.length).trim(),
+        ]));
+      }
+      if (pageCount === 1) return { '1': text.trim() };
+      const paragraphs = text.trim().split(/\n[ \t]*\n+/).map(paragraph => paragraph.trim());
+      if (paragraphs.length !== pageCount) {
+        throw new Error(`未找到“第…页”页标；自然分段有 ${paragraphs.length} 段，当前 PDF 有 ${pageCount} 页，请核对分段`);
+      }
+      return Object.fromEntries(paragraphs.map((paragraph, index) => [String(index + 1), paragraph]));
+    }
     const pages = {};
     headings.forEach((heading, index) => {
       const page = Number(heading[1].replace(/[０-９]/g, digit => String(digit.charCodeAt(0) - 65296)));
@@ -524,7 +543,13 @@
   async function importModel(key, file) {
     try {
       if (!bookId || !state.count) throw new Error('请先导入 PDF 项目');
-      const pages = parsePageTextFile(await file.text(), state.count);
+      const sourceText = await file.text();
+      const hasPageHeadings = /^[^\n]*?第[ \t]*[0-9０-９]+[ \t]*页[^\n]*$/m.test(sourceText);
+      const pages = parsePageTextFile(sourceText, state.count);
+      if (!hasPageHeadings && !root.confirm(`此 TXT 没有“第…页”页标，已按 ${Object.keys(pages).length} 个自然分段依次对应当前 PDF 的第 1–${state.count} 页。请确认是同一本书；继续将覆盖这些页现有的 ${MODEL_LABELS[key]} 内容。`)) {
+        feedback(`${MODEL_LABELS[key]} 导入已取消。`);
+        return;
+      }
       feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页…`);
       await requestJson(endpoint(`/model-results/${key}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),

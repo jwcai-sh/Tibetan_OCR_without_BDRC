@@ -124,6 +124,23 @@ test('imports pages separated by the Mingdeng OCR TXT headings', () => {
   assert.deepEqual(parsePageTextFile(source, 2), { '1': 'ཀ་', '2': 'ཁ་' });
 });
 
+test('unnumbered TXT maps repeated PDF section headers to pages in order', () => {
+  const source = '【1.pdf】\nཀ་\n\n【1.pdf】\nཁ་\n\n【1.pdf】\nག་';
+  assert.deepEqual(parsePageTextFile(source, 3), {
+    '1': '【1.pdf】\nཀ་', '2': '【1.pdf】\nཁ་', '3': '【1.pdf】\nག་',
+  });
+  assert.throws(() => parsePageTextFile(source, 2), /PDF 段首.*不一致/);
+  assert.throws(() => parsePageTextFile('【1.pdf】\nཀ་\n\n【2.pdf】\nཁ་', 2), /同一本书/);
+});
+
+test('unnumbered TXT maps blank-line sections only when they match the PDF page count', () => {
+  assert.deepEqual(parsePageTextFile('ཀ་\n下一行\n\nཁ་\n\nག་', 3), {
+    '1': 'ཀ་\n下一行', '2': 'ཁ་', '3': 'ག་',
+  });
+  assert.throws(() => parsePageTextFile('ཀ་\n\nཁ་', 3), /自然分段有 2 段/);
+  assert.deepEqual(parsePageTextFile('ཀ་\n\nཁ་', 1), { '1': 'ཀ་\n\nཁ་' });
+});
+
 test('corrected export retains Tibetan line breaks and orders pages numerically', () => {
   const content = buildCorrectedExport([
     { page_num: 2, saved: true, text: 'ག་\r\nང་' },
