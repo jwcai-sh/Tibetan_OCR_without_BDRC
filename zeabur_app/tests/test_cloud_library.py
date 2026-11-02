@@ -279,8 +279,9 @@ class CloudLibraryTest(unittest.TestCase):
         book_id = book["book_id"]
         main.write_json(book_id, "state.json", {"page_count": 2, "ocr_results": {"1": {"text": "原工作台校对"}}})
         base = f"/api/books/{book_id}"
-        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"1": "ཀ་"}}).status_code, 400)
-        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"1": "ཀ་", "2": "ཁ་"}}).status_code, 200)
+        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"1": "ཀ་"}}).status_code, 200)
+        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"2": "ཁ་"}}).status_code, 200)
+        self.assertEqual(self.client.put(f"{base}/model-results/teacher", json={"pages": {"3": "越界"}}).status_code, 400)
         self.assertEqual(self.client.put(f"{base}/model-results/yigdzin1", json={"pages": {"1": "ཀ་", "2": ""}}).status_code, 200)
         self.assertEqual(self.client.get(f"{base}/model-results/teacher").json()["pages"]["2"], "ཁ་")
         self.assertEqual(self.client.get(f"{base}/model-results/yigdzin1").json()["pages"]["2"], "")

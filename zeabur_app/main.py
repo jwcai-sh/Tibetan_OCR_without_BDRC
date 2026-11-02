@@ -789,21 +789,28 @@ async def put_whole_page_model_results(book_id: str, model_key: str, request: Re
     count = whole_page_book_count(book_id)
     payload = await request.json()
     pages = payload.get("pages") if isinstance(payload, dict) else None
-    if not isinstance(pages, dict) or len(pages) != count or any(
-        str(page) not in pages or not isinstance(pages[str(page)], str)
-        for page in range(1, count + 1)
-    ) or any(not str(page).isdigit() or not 1 <= int(page) <= count for page in pages):
-        raise HTTPException(400, "整页候选必须包含书籍的每一页")
-    if sum(len(text) for text in pages.values()) > 2_000_000:
+    if not isinstance(pages, dict) or not pages or any(
+        not str(page).isdigit() or not 1 <= int(page) <= count or not isinstance(text, str)
+        for page, text in pages.items()
+    ):
+        raise HTTPException(400, "整页候选必须包含有效的“第…页”页码")
+    try:
+        previous_pages = read_json(book_id, f"model-results/{model_key}.json").get("pages", {})
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        previous_pages = {}
+    merged_pages = {**previous_pages, **{str(page): text.strip() for page, text in pages.items()}}
+    if sum(len(text) for text in merged_pages.values()) > 2_000_000:
         raise HTTPException(413, "整页候选过大")
     result = {
         "model": model_key,
-        "pages": {str(page): pages[str(page)].strip() for page in range(1, count + 1)},
+        "pages": merged_pages,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import",
     }
     write_json(book_id, f"model-results/{model_key}.json", result)
-    return {"ok": True, "page_count": count, "updated_at": result["updated_at"]}
+    return {"ok": True, "page_count": len(merged_pages), "updated_at": result["updated_at"]}
 
 
 @app.get("/api/books/{book_id}/whole-page-proofread/{page_num}")

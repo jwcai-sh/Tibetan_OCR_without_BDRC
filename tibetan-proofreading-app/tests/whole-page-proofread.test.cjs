@@ -110,10 +110,13 @@ test('marks extra text and a missing baseline character', () => {
   assert.equal(missing.some(piece => piece.type === 'omission'), true);
 });
 
-test('rejects missing page headings and keeps a deliberately empty page', () => {
+test('accepts selected pages and keeps a deliberately empty page', () => {
   const parsed = parsePageTextFile('第 1 页\nཀ་\n\n第 2 页\n', 2);
   assert.deepEqual(parsed, { '1': 'ཀ་', '2': '' });
-  assert.throws(() => parsePageTextFile('第 1 页\nཀ་', 2), /2 页/);
+  assert.deepEqual(parsePageTextFile('### 第 2 页：教师稿\nཁ་', 3), { '2': 'ཁ་' });
+  assert.throws(() => parsePageTextFile('没有页标', 2), /第…页/);
+  assert.throws(() => parsePageTextFile('第 3 页\nཀ་', 2), /范围/);
+  assert.throws(() => parsePageTextFile('第 1 页\nཀ་\n第 1 页\nཁ་', 2), /重复/);
 });
 
 test('imports pages separated by the Mingdeng OCR TXT headings', () => {

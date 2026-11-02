@@ -6,12 +6,13 @@
 
   function parsePageTextFile(source, pageCount) {
     const text = String(source || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-    const headings = [...text.matchAll(/^[ \t]*(?:={3,}[ \t]*)?第[ \t]*(\d+)[ \t]*页(?:[ \t]*={3,})?[ \t]*$/gm)];
-    if (headings.length !== pageCount) throw new Error(`需要 ${pageCount} 页，实际找到 ${headings.length} 页`);
+    const headings = [...text.matchAll(/^[^\n]*?第[ \t]*([0-9０-９]+)[ \t]*页[^\n]*$/gm)];
+    if (!headings.length) throw new Error('未找到“第…页”页标');
     const pages = {};
     headings.forEach((heading, index) => {
-      const page = Number(heading[1]);
-      if (page !== index + 1) throw new Error(`页码不连续：第 ${page} 页`);
+      const page = Number(heading[1].replace(/[０-９]/g, digit => String(digit.charCodeAt(0) - 65296)));
+      if (page < 1 || page > pageCount) throw new Error(`第 ${page} 页不在当前文档的 1–${pageCount} 页范围内`);
+      if (Object.hasOwn(pages, String(page))) throw new Error(`第 ${page} 页重复`);
       pages[String(page)] = text.slice(heading.index + heading[0].length, headings[index + 1]?.index ?? text.length).trim();
     });
     return pages;
@@ -524,11 +525,11 @@
     try {
       if (!bookId || !state.count) throw new Error('请先导入 PDF 项目');
       const pages = parsePageTextFile(await file.text(), state.count);
-      feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${state.count} 页…`);
+      feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页…`);
       await requestJson(endpoint(`/model-results/${key}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
       });
-      state.pages[key] = pages;
+      state.pages[key] = { ...(state.pages[key] || {}), ...pages };
       if (key === 'gemini4') {
         state.pageModels = {};
       }
