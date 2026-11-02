@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const MODEL_KEYS = ['gemini4', 'openai', 'teacher', 'yigdzin1'];
+  const MODEL_KEYS = ['gemini4', 'teacher', 'yigdzin1', 'openai'];
   const MODEL_LABELS = { gemini4: 'Gemini 4', openai: 'GPT（OpenAI API）', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
 
   function parsePageTextFile(source, pageCount) {
@@ -77,6 +77,19 @@
     return pieces;
   }
 
+  function candidateSegments(pages, baselineKey, key, page) {
+    const candidate = pages?.[key]?.[String(page)] || '';
+    if (!candidate) return [];
+    const reference = pages?.[baselineKey]?.[String(page)] || '';
+    if (key === baselineKey || !reference) return [{ type: 'plain', text: candidate }];
+    return diffSegments(reference, candidate);
+  }
+
+  function normalizeModelOrder(order) {
+    const known = Array.isArray(order) ? order.filter((key, index) => MODEL_KEYS.includes(key) && order.indexOf(key) === index) : [];
+    return [...known, ...MODEL_KEYS.filter(key => !known.includes(key))];
+  }
+
   function pagesForRecognition(count, pages, mode) {
     return Array.from({ length: count }, (_, index) => index + 1)
       .filter(page => mode !== 'remaining' || !String(pages?.[String(page)] || '').trim());
@@ -117,23 +130,41 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
   $('topImportControls').hidden = Boolean(bookId);
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'gemini4', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
   const rotationKey = scope => `whole-page-preview-rotation-v2:${bookId}:${scope}`;
+  const modelOrderKey = `whole-page-model-order:${bookId}`;
+  const baselineKey = `whole-page-baseline:${bookId}`;
 
   function storedRotation(scope) {
     try {
       const value = Number(root.localStorage.getItem(rotationKey(scope)));
       return [0, 90, 180, 270].includes(value) ? value : 0;
     } catch { return 0; }
+  }
+
+  function restoreModelPreferences() {
+    let order = null;
+    try {
+      order = JSON.parse(root.localStorage.getItem(modelOrderKey));
+      const savedBaseline = root.localStorage.getItem(baselineKey);
+      if (MODEL_KEYS.includes(savedBaseline) && !$(`${savedBaseline}Panel`).hidden) state.baselineKey = savedBaseline;
+    } catch { /* Default order and Gemini baseline remain usable. */ }
+    for (const key of normalizeModelOrder(order)) $('modelCards').appendChild($(`${key}Panel`));
+  }
+
+  function saveModelOrder() {
+    const order = [...$('modelCards').children].map(panel => panel.dataset.model);
+    try { root.localStorage.setItem(modelOrderKey, JSON.stringify(order)); }
+    catch { /* Reordering still works for this session. */ }
   }
 
   function pageRotation(page) {
@@ -176,31 +207,56 @@
     return [...$('geminiRecognitionModel').options].find(option => option.value === model)?.textContent || model;
   }
 
+  function modelLabel(key) {
+    if (key === 'gemini4') return geminiLabel();
+    if (key === 'openai') return `GPT（${String(state.openaiPageModels[String(state.page)] || state.openaiModel || 'OpenAI API').replace(/^openai:/, '')}）`;
+    return MODEL_LABELS[key];
+  }
+
+  function renderBaselineInfo() {
+    const label = modelLabel(state.baselineKey);
+    const hasReference = Boolean(state.pages[state.baselineKey]?.[String(state.page)]);
+    $('baselineDescription').textContent = hasReference
+      ? `以 ${label} 为差异基准。`
+      : `${label} 本页无识别文本，暂停差异高亮。`;
+    $('diffHint').textContent = hasReference
+      ? `黄色表示候选比 ${label} 多识或写法不同；橙色短线表示候选漏识。`
+      : '基准模型本页无识别文本，因此不标记差异。';
+  }
+
   function renderCandidate(key) {
+    const panel = $(`${key}Panel`);
     const container = $(`${key}Text`);
     container.replaceChildren();
-    if (key === 'gemini4') $('geminiModelLabel').textContent = `${geminiLabel()} · 差异基准`;
-    if (key === 'openai') $('openaiModelLabel').textContent = `GPT（${String(state.openaiPageModels[String(state.page)] || state.openaiModel || 'OpenAI API').replace(/^openai:/, '')}）`;
+    panel.querySelector('.model-label').textContent = `${modelLabel(key)}${key === state.baselineKey ? ' · 差异基准' : ''}`;
+    panel.classList.toggle('is-baseline', key === state.baselineKey);
+    panel.querySelector('.set-baseline').setAttribute('aria-pressed', String(key === state.baselineKey));
     const text = state.pages[key]?.[String(state.page)] || '';
+    panel.querySelector('.fill-corrected').disabled = !text;
+    panel.querySelector('.set-baseline').disabled = !text;
     if (!text) {
       container.textContent = key === 'yigdzin1' ? '本页无藏文识别结果。' : '本页尚无识别结果。';
       container.classList.add('missing');
       return;
     }
     container.classList.remove('missing');
-    if (key === 'gemini4') { container.textContent = text; return; }
-    for (const piece of diffSegments(state.pages.gemini4?.[String(state.page)] || '', text)) {
+    for (const piece of candidateSegments(state.pages, state.baselineKey, key, state.page)) {
       if (piece.type === 'plain') container.appendChild(root.document.createTextNode(piece.text));
       else {
         const mark = root.document.createElement(piece.type === 'diff' ? 'mark' : 'span');
         mark.className = piece.type === 'diff' ? 'different' : 'omission';
         if (piece.type === 'omission') {
-          mark.title = 'Gemini 有字，此结果漏识';
+          mark.title = `${modelLabel(state.baselineKey)} 有字，此结果漏识`;
           mark.setAttribute('aria-label', mark.title);
         } else mark.textContent = piece.text;
         container.appendChild(mark);
       }
     }
+  }
+
+  function renderAllCandidates() {
+    for (const key of MODEL_KEYS) renderCandidate(key);
+    renderBaselineInfo();
   }
 
   function renderNavigation() {
@@ -233,7 +289,7 @@
     const pageModel = String(state.pageModels[String(page)] || '').replace(/^gemini:/, '');
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
     renderNavigation();
-    for (const key of MODEL_KEYS) renderCandidate(key);
+    renderAllCandidates();
     renderPagePreview();
     $('correctedText').value = '';
     $('saveCorrected').disabled = true;
@@ -278,7 +334,7 @@
       });
       state.pages.gemini4[String(page)] = saved.text;
       state.pageModels[String(page)] = saved.model;
-      if (state.page === page) for (const key of MODEL_KEYS) renderCandidate(key);
+      if (state.page === page) renderAllCandidates();
       return saved;
   }
 
@@ -347,7 +403,10 @@
     });
     state.pages.openai[String(page)] = saved.text;
     state.openaiPageModels[String(page)] = saved.model;
-    if (state.page === page) renderCandidate('openai');
+    if (state.page === page) {
+      if (state.baselineKey === 'openai') renderAllCandidates();
+      else renderCandidate('openai');
+    }
     updateRecognitionControls();
     return saved;
   }
@@ -466,8 +525,9 @@
       state.pages[key] = pages;
       if (key === 'gemini4') {
         state.pageModels = {};
-        for (const model of MODEL_KEYS) renderCandidate(model);
-      } else renderCandidate(key);
+      }
+      if (key === state.baselineKey) renderAllCandidates();
+      else renderCandidate(key);
       updateRecognitionControls();
       feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
       if (key === 'gemini4') root.document.querySelector('.import-controls').open = false;
@@ -491,6 +551,73 @@
     }
   }
 
+  function setupModelCards() {
+    const cards = $('modelCards');
+    let dragging = null;
+    const clearDropMarkers = () => {
+      for (const panel of cards.children) panel.classList.remove('drop-before', 'drop-after', 'dragging');
+    };
+    restoreModelPreferences();
+    cards.addEventListener('click', event => {
+      const button = event.target.closest('button');
+      const panel = button?.closest('.model-panel');
+      if (!panel) return;
+      const key = panel.dataset.model;
+      const text = state.pages[key]?.[String(state.page)] || '';
+      if (button.classList.contains('fill-corrected') && text) {
+        $('correctedText').value = text;
+        $('correctedText').dispatchEvent(new Event('input'));
+      } else if (button.classList.contains('set-baseline') && text && key !== state.baselineKey) {
+        state.baselineKey = key;
+        try { root.localStorage.setItem(baselineKey, key); } catch { /* Session selection still works. */ }
+        renderAllCandidates();
+        feedback(`已将 ${modelLabel(key)} 设为差异基准；正确版内容未修改。`);
+      }
+    });
+    cards.addEventListener('dragstart', event => {
+      const handle = event.target.closest('.model-drag-handle');
+      if (!handle) { event.preventDefault(); return; }
+      dragging = handle.closest('.model-panel');
+      dragging.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', dragging.dataset.model);
+    });
+    cards.addEventListener('dragover', event => {
+      if (!dragging) return;
+      const target = event.target.closest('.model-panel');
+      if (!target || target === dragging || target.hidden) return;
+      event.preventDefault();
+      for (const panel of cards.children) panel.classList.remove('drop-before', 'drop-after');
+      const before = event.clientY < target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2;
+      target.classList.add(before ? 'drop-before' : 'drop-after');
+    });
+    cards.addEventListener('drop', event => {
+      if (!dragging) return;
+      const target = event.target.closest('.model-panel');
+      if (target && target !== dragging && !target.hidden) {
+        event.preventDefault();
+        const before = target.classList.contains('drop-before');
+        cards.insertBefore(dragging, before ? target : target.nextSibling);
+        saveModelOrder();
+      }
+      clearDropMarkers();
+      dragging = null;
+    });
+    cards.addEventListener('dragend', () => { clearDropMarkers(); dragging = null; });
+    cards.addEventListener('keydown', event => {
+      if (!event.target.classList.contains('model-drag-handle') || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault();
+      const panel = event.target.closest('.model-panel');
+      const visible = [...cards.children].filter(item => !item.hidden);
+      const index = visible.indexOf(panel);
+      const target = visible[index + (event.key === 'ArrowUp' ? -1 : 1)];
+      if (!target) return;
+      cards.insertBefore(panel, event.key === 'ArrowUp' ? target : target.nextSibling);
+      saveModelOrder();
+      event.target.focus();
+    });
+  }
+
   $('previous').addEventListener('click', () => void goToPage(state.page - 1));
   $('next').addEventListener('click', () => void goToPage(state.page + 1));
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
@@ -509,10 +636,6 @@
   $('stopBatchRecognition').addEventListener('click', () => {
     state.batchStop = true;
     feedback('批量识别将在当前页完成后停止。');
-  });
-  $('copyGemini').addEventListener('click', () => {
-    $('correctedText').value = state.pages.gemini4?.[String(state.page)] || '';
-    $('correctedText').dispatchEvent(new Event('input'));
   });
   $('correctedText').addEventListener('input', () => {
     state.dirty = true;
@@ -602,5 +725,6 @@
       await loadPage(Math.min(state.count, state.page));
     } catch (error) { feedback(`整页校对加载失败：${error.message}`, true); }
   }
+  setupModelCards();
   void start();
 })(typeof window !== 'undefined' ? window : globalThis);

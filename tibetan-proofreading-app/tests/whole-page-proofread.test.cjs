@@ -2,7 +2,20 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, candidateSegments, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+
+test('selected model is the only unmarked baseline and missing baselines do not mark differences', () => {
+  const pages = { gemini4: { '1': 'ཀ་ཁ' }, teacher: { '1': 'ཀ་ག་ཁ' }, yigdzin1: { '1': 'ཀ་ཁ' } };
+  assert.deepEqual(candidateSegments(pages, 'teacher', 'teacher', 1), [{ type: 'plain', text: 'ཀ་ག་ཁ' }]);
+  assert.equal(candidateSegments(pages, 'teacher', 'gemini4', 1).some(piece => piece.type !== 'plain'), true);
+  assert.deepEqual(candidateSegments(pages, 'yigdzin1', 'teacher', 2), []);
+  assert.deepEqual(candidateSegments(pages, 'openai', 'teacher', 1), [{ type: 'plain', text: 'ཀ་ག་ཁ' }]);
+});
+
+test('saved card order keeps each model once and restores omitted models', () => {
+  assert.deepEqual(normalizeModelOrder(['yigdzin1', 'teacher', 'teacher', 'unknown']), ['yigdzin1', 'teacher', 'gemini4', 'openai']);
+  assert.deepEqual(normalizeModelOrder(null), ['gemini4', 'teacher', 'yigdzin1', 'openai']);
+});
 
 test('batch retries only failed pages and leaves successful pages untouched', async () => {
   const attempts = [];
@@ -66,7 +79,7 @@ test('Gemini panel offers model selection and current-page recognition', () => {
   assert.match(script, /model-results\/gemini4\/pages\/\$\{page\}/);
 });
 
-test('GPT candidate uses its own cloud jobs and remains separate from the Gemini baseline', () => {
+test('GPT candidate uses its own cloud jobs and follows the selected baseline', () => {
   const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
   const script = readFileSync(join(__dirname, '../whole-page-proofread.js'), 'utf8');
   assert.match(html, /id="openaiPanel"/);
@@ -74,7 +87,7 @@ test('GPT candidate uses its own cloud jobs and remains separate from the Gemini
   assert.match(html, /id="recognizeOpenAIRemainingPages"/);
   assert.match(script, /openai-recognition-jobs/);
   assert.match(script, /model-results\/openai\/pages\/\$\{page\}/);
-  assert.match(script, /diffSegments\(state\.pages\.gemini4/);
+  assert.match(script, /candidateSegments\(state\.pages, state\.baselineKey, key, state\.page\)/);
 });
 
 test('line breaks and spaces do not create Tibetan differences', () => {
