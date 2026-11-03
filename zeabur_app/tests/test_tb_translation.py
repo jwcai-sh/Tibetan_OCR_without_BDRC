@@ -125,3 +125,24 @@ class TbTranslationTest(unittest.TestCase):
         self.assertEqual(self.client.put(url, json={**payload, "entries": {"TB-9999": "x"}}).status_code, 400)
         self.assertEqual(self.client.put(url, json={**payload, "source_hash": "wrong"}).status_code, 409)
         self.assertEqual(self.client.put(f"/api/books/{BOOK}/tb/references/other", json=payload).status_code, 400)
+
+    def test_model_style_versions_keep_old_translation_and_metadata(self):
+        self.client.put(f"/api/books/{BOOK}/tb/source", json={"name": "book.txt", "text": SOURCE})
+        digest = hashlib.sha256(SOURCE.encode()).hexdigest()
+        url = f"/api/books/{BOOK}/tb/results/TB-0001"
+        old = {"source_hash": digest, "kind": "model", "model": "gemini:a", "text": "旧译"}
+        styled = {**old, "model": "gemini:a@@tb-classical-12345678", "text": "新译",
+                  "metadata": {"model_id": "gemini:a", "profile_id": "tb-classical",
+                               "profile_name": "典籍文风", "profile_version": "12345678",
+                               "instruction": "凝练", "glossary": "ཀ = 甲", "examples": "原文：ཀ།\n译文：甲。"}}
+        self.assertEqual(self.client.put(url, json=old).status_code, 200)
+        self.assertEqual(self.client.put(url, json=styled).status_code, 200)
+        response = self.client.get(f"/api/books/{BOOK}/tb/results?ids=TB-0001&source_hash={digest}&models=gemini:a,gemini:a@@tb-classical-12345678")
+        self.assertEqual(response.status_code, 200, response.text)
+        variants = response.json()["records"]["TB-0001"]["models"]
+        self.assertEqual(variants["gemini:a"]["text"], "旧译")
+        self.assertEqual(variants[styled["model"]]["text"], "新译")
+        self.assertEqual(variants[styled["model"]]["metadata"], styled["metadata"])
+        progress = self.client.get(f"/api/books/{BOOK}/tb/progress?source_hash={digest}&models=gemini:a,{styled['model']}")
+        self.assertEqual(progress.status_code, 200, progress.text)
+        self.assertEqual(progress.json()["models"], {"gemini:a": ["TB-0001"], styled["model"]: ["TB-0001"]})

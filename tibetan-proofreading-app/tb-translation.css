@@ -54,3 +54,12 @@
 .segment-navigation{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
 .segment-navigation button{padding:6px 10px}
 @media(max-width:600px){.progress-heading-title{text-align:left}.progress-page-navigation{width:100%}.progress-page-navigation .page-controls{flex-wrap:wrap}}
+
+.style-settings{margin:12px 0;padding:14px 16px;background:#fff;border:1px solid #dae2db;border-radius:12px}
+.style-settings summary{cursor:pointer;font-weight:700;color:#203d34}
+.style-settings p{margin:9px 0;color:#5d7065;font-size:13px}
+.style-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+.style-fields label{display:grid;align-content:start;gap:5px;font-size:13px;font-weight:700}
+.style-fields small{font-weight:400;color:#5d7065}
+.style-fields textarea{width:100%;min-height:110px;padding:9px;border:1px solid #b8c5bc;border-radius:7px;resize:vertical;line-height:1.5}
+@media(max-width:800px){.style-fields{grid-template-columns:1fr}}

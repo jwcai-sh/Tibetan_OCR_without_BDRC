@@ -201,3 +201,22 @@ test('numbered reference text maps to TB ids and keeps continuation lines', () =
   const exported = core.exportTranslationMarkdown(rows, {}, [], { teacher: { 'TB-0001': '教师文字' } });
   assert.match(exported, /教师校正稿[\s\S]*教师文字/);
 });
+
+test('translator style, glossary and examples are included while saved variants remain separate', () => {
+  const [academic, classical, modern] = core.STYLE_PROFILES;
+  const model = 'gemini:test';
+  assert.equal(core.resultKey(model, academic), model);
+  const classicalKey = core.resultKey(model, classical, 'ཀ = 甲', '原文：ཀ།\n译文：甲。');
+  assert.notEqual(classicalKey, model);
+  assert.notEqual(classicalKey, core.resultKey(model, modern, 'ཀ = 甲', '原文：ཀ།\n译文：甲。'));
+  assert.notEqual(classicalKey, core.resultKey(model, classical, 'ཀ = 乙', '原文：ཀ།\n译文：甲。'));
+  assert.equal(classicalKey, core.resultKey(model, classical, 'ཀ = 甲', '原文：ཀ།\n译文：甲。'));
+  const request = core.buildTranslationRequest({ id: 'TB-0001', text: 'ཀ།' }, {},
+    { model, sourceName: 'book.txt', page: 1, profile: classical,
+      glossary: 'ཀ = 甲', examples: '原文：ཀ།\n译文：甲。' });
+  assert.equal(request.role_id, classical.id);
+  assert.match(request.system_prompt, /凝练/);
+  assert.match(request.user_prompt_template, /ཀ = 甲/);
+  assert.match(request.user_prompt_template, /译文：甲/);
+  assert.equal(core.buildAggregatorRequest(request).model, model);
+});

@@ -10,7 +10,7 @@
   const cloudBase = bookId ? `/api/books/${bookId}/tb` : '';
   const byId = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
-    'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'healthButton', 'status', 'workspace',
+    'sourceImportControl', 'fileInput', 'endpointInput', 'modelAInput', 'modelBInput', 'customModelBInput', 'styleAInput', 'styleBInput', 'customStyleInput', 'glossaryInput', 'examplesInput', 'styleSaveState', 'healthButton', 'status', 'workspace',
     'firstPageButton', 'previousPageButton', 'nextPageButton', 'lastPageButton', 'pageInput', 'pageTotal',
     'progressOverview', 'progressModelLabel',
     'bookProgressText', 'segmentProgressText', 'bookProgressBar', 'pageProgressGrid',
@@ -64,7 +64,7 @@
 
   async function loadCloudRows(rows, signal) {
     if (!bookId || !rows.length) return;
-    const models = modelIds().filter(Boolean);
+    const models = resultKeys().filter(Boolean);
     for (let start = 0; start < rows.length; start += 30) {
       if (signal?.aborted) throw new Error('已停止翻译');
       const ids = rows.slice(start, start + 30).map((row) => row.id).join(',');
@@ -80,7 +80,7 @@
 
   async function loadCloudProgress() {
     if (!bookId || !state.rows.length) return;
-    const model = modelIds()[state.progressSlot];
+    const model = resultKeys()[state.progressSlot];
     if (!model) return;
     const query = new URLSearchParams({ models: model, source_hash: state.hash });
     const result = await cloudJson(`/progress?${query}`);
@@ -99,17 +99,17 @@
     state.progressSlot = slot;
     if (!state.rows.length) return;
     renderProgress();
-    if (bookId && !completedIdsFor(modelIds()[slot])) void loadCloudProgress().catch(showError);
+    if (bookId && !completedIdsFor(resultKeys()[slot])) void loadCloudProgress().catch(showError);
   }
 
   function renderProgress() {
     if (!state.rows.length) return;
     ui.progressOverview.hidden = false;
     const pageCount = Math.ceil(state.rows.length / PAGE_SIZE);
-    const model = modelIds()[state.progressSlot];
-    ui.progressModelLabel.textContent = state.progressSlot === 0
+    const model = resultKeys()[state.progressSlot];
+    ui.progressModelLabel.textContent = (state.progressSlot === 0
       ? ui.modelAInput.selectedOptions[0]?.textContent || model
-      : ui.modelBInput.value === 'custom' ? model : ui.modelBInput.selectedOptions[0]?.textContent || model;
+      : ui.modelBInput.value === 'custom' ? modelIds()[1] : ui.modelBInput.selectedOptions[0]?.textContent || model) + ` · ${profileFor(state.progressSlot).name}`;
     const completed = completedIdsFor(model);
     if (!completed) {
       ui.bookProgressText.textContent = '正在统计云端进度…';
@@ -214,11 +214,11 @@
     });
   }
 
-  async function saveCloudResult(id, kind, text, model = '') {
+  async function saveCloudResult(id, kind, text, model = '', metadata = null) {
     if (!bookId) return;
     await cloudJson(`/results/${encodeURIComponent(id)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_hash: state.hash, kind, model, text }),
+      body: JSON.stringify({ source_hash: state.hash, kind, model, text, ...(metadata ? { metadata } : {}) }),
     });
   }
 
@@ -231,6 +231,20 @@
   function currentRow() { return state.rows[state.selected]; }
   function recordFor(id) { return state.records[id] ||= { id, models: {}, final: '' }; }
   function modelIds() { return [ui.modelAInput.value.trim(), ui.modelBInput.value === 'custom' ? ui.customModelBInput.value.trim() : ui.modelBInput.value.trim()]; }
+  function profileFor(slot) {
+    const id = (slot === 0 ? ui.styleAInput : ui.styleBInput).value;
+    if (id === 'tb-custom') return { id, name: '自定义译风', instruction: ui.customStyleInput.value.trim(), temperature: 0.2 };
+    return core.STYLE_PROFILES.find((profile) => profile.id === id) || core.STYLE_PROFILES[0];
+  }
+  function resultKeys() {
+    return modelIds().map((model, slot) => model && core.resultKey(model, profileFor(slot), ui.glossaryInput.value, ui.examplesInput.value));
+  }
+  function profileMetadata(slot) {
+    const profile = profileFor(slot);
+    return { model_id: modelIds()[slot], profile_id: profile.id, profile_name: profile.name,
+      profile_version: core.styleVersion(profile, ui.glossaryInput.value, ui.examplesInput.value),
+      instruction: profile.instruction, glossary: ui.glossaryInput.value.trim(), examples: ui.examplesInput.value.trim() };
+  }
   function validateModels(both = false) {
     const models = modelIds();
     if (!models[0] || !models[1]) throw new Error('请分别选择 Gemini 和 GPT 模型');
@@ -238,11 +252,18 @@
     return models;
   }
 
-  function saveSettings() {
+  function saveSettings(refresh = true) {
+    if (ui.customStyleInput.value.length > 4000 || ui.glossaryInput.value.length > 12000 || ui.examplesInput.value.length > 16000) {
+      ui.styleSaveState.textContent = '配置过长：译风最多 4000 字，术语表 12000 字，样本 16000 字。';
+      return;
+    }
     localStorage.setItem(settingsKey, JSON.stringify({
       endpoint: ui.endpointInput.value.trim(), modelA: ui.modelAInput.value.trim(), modelB: modelIds()[1],
+      styleA: ui.styleAInput.value, styleB: ui.styleBInput.value, customStyle: ui.customStyleInput.value,
+      glossary: ui.glossaryInput.value, examples: ui.examplesInput.value,
     }));
-    if (state.rows.length) {
+    ui.styleSaveState.textContent = '译风配置已保存到此浏览器；新译文会记录当前配置版本。';
+    if (refresh && state.rows.length) {
       renderEditor(false);
       if (bookId) void loadCloudRows(core.getVirtualPage(state.rows, state.page, PAGE_SIZE)).catch(showError);
       if (bookId) void loadCloudProgress().catch(showError);
@@ -259,6 +280,14 @@
         if ([...ui.modelBInput.options].some((option) => option.value === saved.modelB)) ui.modelBInput.value = saved.modelB;
         else { ui.modelBInput.value = 'custom'; ui.customModelBInput.value = saved.modelB; }
       }
+      for (const slot of [0, 1]) {
+        const select = slot === 0 ? ui.styleAInput : ui.styleBInput;
+        const chosen = saved[slot === 0 ? 'styleA' : 'styleB'];
+        if ([...select.options].some((option) => option.value === chosen)) select.value = chosen;
+      }
+      ui.customStyleInput.value = saved.customStyle || '';
+      ui.glossaryInput.value = saved.glossary || '';
+      ui.examplesInput.value = saved.examples || '';
       ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom';
     } catch (_) { /* Keep visible defaults. */ }
   }
@@ -321,12 +350,12 @@
   function renderEditor(resetDraft) {
     const row = currentRow();
     const record = recordFor(row.id);
-    const [modelA, modelB] = modelIds();
+    const [modelA, modelB] = resultKeys();
     ui.segmentTitle.textContent = row.id;
     ui.segmentProgress.textContent = `${state.selected + 1} / ${state.rows.length}`;
     ui.sourceText.textContent = row.text;
-    ui.modelATitle.textContent = ui.modelAInput.selectedOptions[0]?.textContent || modelA;
-    ui.modelBTitle.textContent = ui.modelBInput.value === 'custom' ? modelB : ui.modelBInput.selectedOptions[0]?.textContent || modelB;
+    ui.modelATitle.textContent = `${ui.modelAInput.selectedOptions[0]?.textContent || modelIds()[0]} · ${profileFor(0).name} · ${profileMetadata(0).profile_version}`;
+    ui.modelBTitle.textContent = `${ui.modelBInput.value === 'custom' ? modelIds()[1] : ui.modelBInput.selectedOptions[0]?.textContent || modelIds()[1]} · ${profileFor(1).name} · ${profileMetadata(1).profile_version}`;
     ui.modelAText.value = record.models[modelA]?.text || '';
     ui.modelBText.value = record.models[modelB]?.text || '';
     ui.teacherText.value = state.references.teacher[row.id] || '';
@@ -376,7 +405,7 @@
     state.busy = busy;
     [ui.translateAButton, ui.translateAllAButton, ui.translateRemainingAButton, ui.translateBButton, ui.pilotButton, ui.healthButton].forEach((button) => { button.disabled = busy; });
     ui.stopButton.disabled = !busy;
-    [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.pageInput,
+    [ui.fileInput, ui.teacherImport, ui.yigdzin1Import, ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.styleAInput, ui.styleBInput, ui.customStyleInput, ui.glossaryInput, ui.examplesInput, ui.pageInput,
       ui.firstPageButton, ui.previousPageButton, ui.nextPageButton, ui.lastPageButton, ui.previousSegmentButton, ui.nextSegmentButton].forEach((input) => { input.disabled = busy; });
     ui.pageProgressGrid.querySelectorAll('button').forEach((button) => { button.disabled = busy; });
     if (!busy && state.rows.length) render(false);
@@ -385,7 +414,7 @@
   function updateGeminiBatchControls() {
     const available = state.rows.length > 0 && !state.busy;
     ui.translateAllAButton.disabled = !available;
-    ui.translateRemainingAButton.disabled = !available || !core.selectModelBatchRows(state.rows, state.records, modelIds()[0], 'remaining').length;
+    ui.translateRemainingAButton.disabled = !available || !core.selectModelBatchRows(state.rows, state.records, resultKeys()[0], 'remaining').length;
   }
 
   function addAvailableModels(data) {
@@ -423,11 +452,15 @@
     return { ...data, provider };
   }
 
-  async function translateRow(row, model, signal) {
+  async function translateRow(row, model, signal, slot) {
+    if (new TextEncoder().encode(JSON.stringify(profileMetadata(slot))).length > 40 * 1024) {
+      throw new Error('译风、术语表和样本合计超过 40 KiB，请精简后再翻译');
+    }
     const index = state.rows.indexOf(row);
     const request = core.buildTranslationRequest(row, {
       previous: state.rows[index - 1], next: state.rows[index + 1],
-    }, { model, sourceName: state.name, page: Math.floor(index / PAGE_SIZE) + 1 });
+    }, { model, sourceName: state.name, page: Math.floor(index / PAGE_SIZE) + 1,
+      profile: profileFor(slot), glossary: ui.glossaryInput.value, examples: ui.examplesInput.value });
     const endpoint = ui.endpointInput.value.trim();
     const controller = new AbortController();
     const stop = () => controller.abort();
@@ -463,10 +496,11 @@
     }
   }
 
-  async function saveModel(row, model, text) {
-    await saveCloudResult(row.id, 'model', text, model);
+  async function saveModel(row, model, text, slot) {
+    const metadata = profileMetadata(slot);
+    await saveCloudResult(row.id, 'model', text, model, metadata);
     const record = recordFor(row.id);
-    record.models[model] = { text, updatedAt: new Date().toISOString() };
+    record.models[model] = { text, updatedAt: new Date().toISOString(), metadata };
     state.progress.models[model]?.add(row.id);
     await saveRecord(row.id);
     render(false);
@@ -475,6 +509,7 @@
   async function runOne(which) {
     if (!state.rows.length || state.busy) return;
     const model = modelIds()[which];
+    const resultKey = resultKeys()[which];
     if (!model) { showError(new Error(`请填写模型 ${which === 0 ? 'A' : 'B'} 的完整模型 ID`)); return; }
     selectProgressModel(which);
     const row = currentRow();
@@ -483,9 +518,9 @@
     try {
       await checkHealth();
       status(`正在翻译 ${row.id} / ${model}…`);
-      const translated = await translateRow(row, model, state.controller.signal);
+      const translated = await translateRow(row, model, state.controller.signal, which);
       if (state.controller.signal.aborted) throw new Error('已停止翻译');
-      await saveModel(row, model, translated);
+      await saveModel(row, resultKey, translated, which);
       status(`${row.id} / ${model} 已保存。`, 'success');
     } catch (error) { showError(error); }
     finally { state.controller = null; setBusy(false); }
@@ -493,8 +528,8 @@
 
   async function runPilot() {
     if (!state.rows.length || state.busy) return;
-    let models;
-    try { models = validateModels(true); } catch (error) { showError(error); return; }
+    try { validateModels(true); } catch (error) { showError(error); return; }
+    const models = resultKeys();
     const rows = state.rows.slice(state.selected, state.selected + 20);
     setBusy(true);
     state.controller = new AbortController();
@@ -503,9 +538,9 @@
       await checkHealth();
       status(`从 ${rows[0].id} 开始试译 ${rows.length} 段。已有结果将跳过。`);
       const completed = await core.runTranslationBatch(rows, models, state.records,
-        (row, model) => translateRow(row, model, state.controller.signal),
+        (row, key) => translateRow(row, modelIds()[models.indexOf(key)], state.controller.signal, models.indexOf(key)),
         async (row, model, text) => {
-          await saveModel(row, model, text);
+          await saveModel(row, model, text, models.indexOf(model));
           status(`已保存 ${row.id} / ${model}，可随时停止。`, 'success');
         }, state.controller.signal);
       status(`试译结束：新增 ${completed} 份译文，已有结果已跳过。`, 'success');
@@ -516,6 +551,7 @@
   async function runGeminiBatch(mode) {
     if (!state.rows.length || state.busy) return;
     const model = modelIds()[0];
+    const resultKey = resultKeys()[0];
     if (!model) { showError(new Error('请先选择 Gemini 翻译模型')); return; }
     setBusy(true);
     state.controller = new AbortController();
@@ -527,16 +563,16 @@
         status('正在读取本书已有的 Gemini 译文…');
         await loadCloudRows(state.rows, state.controller.signal);
       }
-      const rows = core.selectModelBatchRows(state.rows, state.records, model, mode);
+      const rows = core.selectModelBatchRows(state.rows, state.records, resultKey, mode);
       if (!rows.length) {
         status(`${model} 的所有段落已有译文。`, 'success');
         return;
       }
       status(`${mode === 'all' ? '重新翻译所有段' : '翻译剩余段'}：${rows.length} 段，模型 ${model}。每段完成后保存，可随时停止。`);
-      await core.runTranslationBatch(rows, [model], state.records,
-        (row) => translateRow(row, model, state.controller.signal),
+      await core.runTranslationBatch(rows, [resultKey], state.records,
+        (row) => translateRow(row, model, state.controller.signal, 0),
         async (row, selectedModel, text) => {
-          await saveModel(row, selectedModel, text);
+          await saveModel(row, selectedModel, text, 0);
           completed += 1;
           status(`已保存 ${completed}/${rows.length}：${row.id} / ${selectedModel}，可随时停止。`, 'success');
         }, state.controller.signal, {
@@ -567,7 +603,7 @@
   async function exportAll() {
     if (!state.rows.length) return;
     if (bookId) await loadCloudRows(state.rows);
-    const models = [...new Set([...modelIds(), ...Object.values(state.records).flatMap((record) => Object.keys(record.models || {}))])].filter(Boolean);
+    const models = [...new Set([...resultKeys(), ...Object.values(state.records).flatMap((record) => Object.keys(record.models || {}))])].filter(Boolean);
     const content = core.exportTranslationMarkdown(state.rows, state.records, models, state.references);
     const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
@@ -580,6 +616,10 @@
 
   function showError(error) { status(error?.message || String(error), 'error'); }
 
+  for (const select of [ui.styleAInput, ui.styleBInput]) {
+    for (const profile of core.STYLE_PROFILES) select.add(new Option(profile.name, profile.id));
+    select.add(new Option('自定义译风', 'tb-custom'));
+  }
   restoreSettings();
   ui.sourceImportControl.hidden = Boolean(bookId);
   if (bookId) {
@@ -592,11 +632,14 @@
     });
   }
   ui.fileInput.addEventListener('change', () => void importFile(ui.fileInput.files[0]).catch(showError));
-  [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('change', () => {
+  [ui.endpointInput, ui.modelAInput, ui.modelBInput, ui.customModelBInput, ui.styleAInput, ui.styleBInput, ui.customStyleInput, ui.glossaryInput, ui.examplesInput].forEach((input) => input.addEventListener('change', () => {
     if (input === ui.modelAInput) selectProgressModel(0);
     if (input === ui.modelBInput || input === ui.customModelBInput) selectProgressModel(1);
     saveSettings();
   }));
+  for (const input of [ui.customStyleInput, ui.glossaryInput, ui.examplesInput]) {
+    input.addEventListener('input', () => { saveSettings(false); ui.styleSaveState.textContent = '配置已保存；离开输入框后更新译文与进度。'; });
+  }
   ui.modelAInput.addEventListener('focus', () => selectProgressModel(0));
   [ui.modelBInput, ui.customModelBInput].forEach((input) => input.addEventListener('focus', () => selectProgressModel(1)));
   ui.modelBInput.addEventListener('change', () => { ui.customModelBInput.hidden = ui.modelBInput.value !== 'custom'; });

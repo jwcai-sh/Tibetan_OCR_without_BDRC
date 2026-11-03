@@ -158,7 +158,8 @@ def create_router(storage: Any) -> APIRouter:
                 if kind == "final":
                     record["final"] = saved.get("text", "")
                 elif saved.get("model") == model:
-                    record["models"][model] = {"text": saved.get("text", ""), "updatedAt": saved.get("updated_at", "")}
+                    record["models"][model] = {"text": saved.get("text", ""), "updatedAt": saved.get("updated_at", ""),
+                                                "metadata": saved.get("metadata") or {}}
             records[segment_id] = record
         return {"source_hash": source_hash, "records": records}
 
@@ -213,8 +214,18 @@ def create_router(storage: Any) -> APIRouter:
             raise HTTPException(400, "译文必须是 64 KiB 以内的文本")
         if kind == "model" and not text.strip():
             raise HTTPException(400, "模型译文不能为空")
+        metadata = payload.get("metadata")
+        if metadata is not None:
+            if kind != "model" or not isinstance(metadata, dict):
+                raise HTTPException(400, "译风配置仅可用于模型译文")
+            if not isinstance(metadata.get("profile_id"), str) or not isinstance(metadata.get("profile_version"), str):
+                raise HTTPException(400, "译风配置缺少 ID 或版本")
+            if len(storage.json.dumps(metadata, ensure_ascii=False).encode("utf-8")) > 48 * 1024:
+                raise HTTPException(413, "译风配置超过 48 KiB")
         record = {"source_hash": payload["source_hash"], "kind": kind, "model": model,
                   "text": text, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if metadata is not None:
+            record["metadata"] = metadata
         storage.write_json(book_id, suffix, record)
         return {"ok": True, "updated_at": record["updated_at"]}
 

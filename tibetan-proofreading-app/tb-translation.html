@@ -6,9 +6,9 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <title>TB 段落翻译对照 · Gemini / GPT / 教师校正稿 / Yigdzin1</title>
   <script>if (new URLSearchParams(location.search).get('embedded') === '1') document.documentElement.classList.add('tb-embedded');</script>
-  <link rel="stylesheet" href="./tb-translation.css?v=20261102-hide-endpoint">
-  <script src="./tb-translation-core.js?v=20261102-untranslated-page-jump" defer></script>
-  <script src="./tb-translation.js?v=20261102-untranslated-page-jump" defer></script>
+  <link rel="stylesheet" href="./tb-translation.css?v=20261103-translator-style">
+  <script src="./tb-translation-core.js?v=20261103-translator-style" defer></script>
+  <script src="./tb-translation.js?v=20261103-translator-style" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -20,6 +20,12 @@
       <label>翻译接口<input id="endpointInput" type="url" value="http://127.0.0.1:8890/api/aggregate/chat" spellcheck="false"></label>
       <button id="healthButton" type="button">检查翻译接口</button>
     </section>
+    <details class="style-settings"><summary>译者风格设置 · 藏汉术语表与对照样本</summary>
+      <p>模型卡片可分别选择译风；这里的术语表和样本供各模型共同参考。修改后生成新的配置版本，已有译文保留。</p>
+      <div class="style-fields"><label>自定义译风指令 <small>选择“自定义译风”时使用</small><textarea id="customStyleInput" spellcheck="false" placeholder="例如：用平实、准确的现代汉语，保留术语原貌。"></textarea></label><label>藏汉术语表 <small>每行一组：藏文 = 中文</small><textarea id="glossaryInput" spellcheck="false" placeholder="དུས་འཁོར་ = 时轮"></textarea></label>
+      <label>藏汉对照样本 <small>建议 3–5 组，按“原文：…／译文：…”填写</small><textarea id="examplesInput" spellcheck="false" placeholder="原文：ཀ།\n译文：……"></textarea></label></div>
+      <p id="styleSaveState" role="status" aria-live="polite">译风配置保存在此浏览器；译文保存所用配置版本。</p>
+    </details>
     <p id="status" role="status" aria-live="polite">请选择含 [TB-0001] 编号的 TXT 文件。原文留在本机，译文按文件内容保存到此浏览器。</p>
     <section id="progressOverview" class="progress-overview" aria-label="翻译完成进度" hidden>
       <div class="progress-heading">
@@ -46,8 +52,8 @@
           <button id="exportButton" type="button">导出全部对照</button>
         </div>
         <div class="comparison-cards">
-          <details class="model-card" open><summary>Gemini 翻译</summary><div class="card-actions"><label>翻译模型 <select id="modelAInput" aria-label="Gemini 翻译模型"><option value="gemini:gemini-4-argon">Gemini 4 Argon</option><option value="gemini:gemini-3.8-flash">Gemini 3.8 Flash</option><option value="gemini:gemini-3.6-flash">Gemini 3.6 Flash</option><option value="gemini:gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（历史译文）</option><option value="gemini:gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option><option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option><option value="gemini:gemini-flash-latest">Gemini Flash Latest</option></select></label><button id="translateAButton" type="button">翻译当前段</button><button id="translateAllAButton" type="button" disabled>翻译所有段</button><button id="translateRemainingAButton" type="button" disabled>翻译剩余段</button><button id="useAButton" type="button">填入人工定稿</button></div><p id="modelATitle" class="model-caption">Gemini 4 Argon</p><textarea id="modelAText" readonly aria-label="Gemini 译文" placeholder="尚未翻译"></textarea></details>
-          <details class="model-card" open hidden><summary>GPT 翻译</summary><div class="card-actions"><label>翻译模型 <select id="modelBInput" aria-label="GPT 翻译模型"><option value="yunwu:gpt-5.5">GPT 5.5（云雾）</option><option value="custom">自定义兼容模型…</option></select><input id="customModelBInput" hidden aria-label="自定义 GPT 模型 ID" placeholder="提供者:模型 ID" spellcheck="false"></label><button id="translateBButton" type="button">翻译当前段</button><button id="useBButton" type="button">填入人工定稿</button></div><p id="modelBTitle" class="model-caption">GPT 5.5（云雾）</p><textarea id="modelBText" readonly aria-label="GPT 译文" placeholder="尚未翻译"></textarea></details>
+          <details class="model-card" open><summary>Gemini 翻译</summary><div class="card-actions"><label>翻译模型 <select id="modelAInput" aria-label="Gemini 翻译模型"><option value="gemini:gemini-4-argon">Gemini 4 Argon</option><option value="gemini:gemini-3.8-flash">Gemini 3.8 Flash</option><option value="gemini:gemini-3.6-flash">Gemini 3.6 Flash</option><option value="gemini:gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite（历史译文）</option><option value="gemini:gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option><option value="gemini:gemini-2.0-flash">Gemini 2.0 Flash</option><option value="gemini:gemini-flash-latest">Gemini Flash Latest</option></select></label><label>译者风格 <select id="styleAInput" aria-label="Gemini 译者风格"></select></label><button id="translateAButton" type="button">翻译当前段</button><button id="translateAllAButton" type="button" disabled>翻译所有段</button><button id="translateRemainingAButton" type="button" disabled>翻译剩余段</button><button id="useAButton" type="button">填入人工定稿</button></div><p id="modelATitle" class="model-caption">Gemini 4 Argon</p><textarea id="modelAText" readonly aria-label="Gemini 译文" placeholder="尚未翻译"></textarea></details>
+          <details class="model-card" open hidden><summary>GPT 翻译</summary><div class="card-actions"><label>翻译模型 <select id="modelBInput" aria-label="GPT 翻译模型"><option value="yunwu:gpt-5.5">GPT 5.5（云雾）</option><option value="custom">自定义兼容模型…</option></select><input id="customModelBInput" hidden aria-label="自定义 GPT 模型 ID" placeholder="提供者:模型 ID" spellcheck="false"></label><label>译者风格 <select id="styleBInput" aria-label="GPT 译者风格"></select></label><button id="translateBButton" type="button">翻译当前段</button><button id="useBButton" type="button">填入人工定稿</button></div><p id="modelBTitle" class="model-caption">GPT 5.5（云雾）</p><textarea id="modelBText" readonly aria-label="GPT 译文" placeholder="尚未翻译"></textarea></details>
           <details class="model-card" open><summary>教师校正稿</summary><div class="card-actions"><label class="reference-import">导入按 TB 编号的教师校正稿 TXT <input id="teacherImport" type="file" accept=".txt,text/plain"></label></div><p id="teacherMeta" class="model-caption">尚未导入</p><textarea id="teacherText" readonly aria-label="教师校正稿" placeholder="当前段暂无教师校正稿"></textarea><button id="useTeacherButton" type="button">填入人工定稿</button></details>
           <details class="model-card" open><summary>Yigdzin1</summary><div class="card-actions"><label class="reference-import">导入按 TB 编号的 Yigdzin1 TXT <input id="yigdzin1Import" type="file" accept=".txt,text/plain"></label></div><p id="yigdzin1Meta" class="model-caption">尚未导入</p><textarea id="yigdzin1Text" readonly aria-label="Yigdzin1 参考稿" placeholder="当前段暂无 Yigdzin1 参考稿"></textarea><button id="useYigdzin1Button" type="button">填入人工定稿</button></details>
         </div>
