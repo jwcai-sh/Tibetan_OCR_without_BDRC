@@ -145,9 +145,7 @@
   }
 
   function defaultPreviewRotation(bookId, sourceName, pageCount, page) {
-    const fileName = String(sourceName).trim().split(/[\\/]/).pop().toLowerCase();
-    return page === 1 && (bookId === 'a3a76874e921481e9d1bd53626f40e99'
-      || (fileName === '1.pdf' && pageCount === 24)) ? 180 : 0;
+    return 0;
   }
 
   function effectivePreviewRotation(bookId, sourceName, pageCount, page, documentRotation, pageRotation) {
@@ -164,7 +162,11 @@
   const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'gemini4', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
-  const rotationKey = scope => `whole-page-preview-rotation-v2:${bookId}:${scope}`;
+  const rotationKey = scope => {
+    const oldInvertedBook = bookId === 'a3a76874e921481e9d1bd53626f40e99'
+      || (state.sourceName.trim().split(/[\\/]/).pop().toLowerCase() === '1.pdf' && state.count === 24);
+    return `whole-page-preview-rotation-${oldInvertedBook ? 'v3' : 'v2'}:${bookId}:${scope}`;
+  };
   const modelOrderKey = `whole-page-model-order:${bookId}`;
   const baselineKey = `whole-page-baseline:${bookId}`;
 
@@ -198,9 +200,35 @@
 
   function renderPagePreview() {
     const rotation = effectivePreviewRotation(bookId, state.sourceName, state.count, state.page, state.documentRotation, pageRotation(state.page));
-    $('pageScan').src = endpoint(`/pages/${state.page}/preview?dpi=200&format=jpeg&landscape=true&rotation=${rotation}`);
+    const source = endpoint(`/pages/${state.page}/preview?dpi=200&format=jpeg&landscape=true&rotation=0`);
+    const scan = $('pageScan');
+    if (scan.dataset.source !== source) {
+      scan.dataset.source = source;
+      scan.dataset.ready = '';
+      $('pageScanFrame').style.height = '';
+      scan.src = source;
+    }
+    layoutPagePreview(rotation);
     $('pageScan').alt = `原始 PDF 第 ${state.page} 页，预览旋转 ${rotation} 度`;
     $('previewRotationStatus').textContent = `本页 ${rotation}° · 整本补充旋转 ${state.documentRotation}°`;
+  }
+
+  function layoutPagePreview(rotation = effectivePreviewRotation(bookId, state.sourceName, state.count, state.page, state.documentRotation, pageRotation(state.page))) {
+    const scan = $('pageScan');
+    if (!scan.dataset.ready || !scan.naturalWidth || !scan.naturalHeight) return;
+    const viewportWidth = scan.parentElement.parentElement.clientWidth;
+    if (!viewportWidth) return;
+    const zoom = (Number(scan.dataset.zoom) || 100) / 100;
+    const imageHeight = viewportWidth * scan.naturalHeight / scan.naturalWidth;
+    const quarterTurn = rotation % 180 !== 0;
+    const scale = zoom * (quarterTurn ? Math.min(1, viewportWidth / imageHeight) : 1);
+    const visualWidth = (quarterTurn ? imageHeight : viewportWidth) * scale;
+    const visualHeight = (quarterTurn ? viewportWidth : imageHeight) * scale;
+    const frame = $('pageScanFrame');
+    frame.style.width = `${Math.max(viewportWidth, visualWidth)}px`;
+    frame.style.height = `${visualHeight}px`;
+    scan.style.width = `${viewportWidth}px`;
+    scan.style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
   }
 
   function feedback(message, error = false) {
@@ -691,6 +719,7 @@
       if (file) await importModel(key, file);
     });
   }
+  $('pageScan').addEventListener('load', () => { $('pageScan').dataset.ready = 'yes'; layoutPagePreview(); });
   $('pageScan').addEventListener('error', () => feedback('原图加载失败；请检查协作登录状态后重试。', true));
   $('backToWorkbench').href = bookId
     ? `/tibetan-proofreading-app/?workflow=ocr&book_id=${encodeURIComponent(bookId)}&view=line`
@@ -702,8 +731,9 @@
       root.location.assign('/tibetan-proofreading-app/');
     } catch (error) { feedback(`退出协作失败：${error.message}`, true); }
   });
-  $('zoomOut').addEventListener('click', () => { $('pageScan').style.width = `${Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)}%`; $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); });
-  $('zoomIn').addEventListener('click', () => { $('pageScan').style.width = `${Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)}%`; $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); });
+  $('zoomOut').addEventListener('click', () => { $('pageScan').dataset.zoom = String(Math.max(60, (Number($('pageScan').dataset.zoom) || 100) - 20)); layoutPagePreview(); });
+  $('zoomIn').addEventListener('click', () => { $('pageScan').dataset.zoom = String(Math.min(200, (Number($('pageScan').dataset.zoom) || 100) + 20)); layoutPagePreview(); });
+  root.addEventListener('resize', () => layoutPagePreview());
   for (const [scope, buttonId] of [['page', 'rotatePage'], ['document', 'rotateDocument']]) {
     const button = $(buttonId);
     button.addEventListener('click', () => {

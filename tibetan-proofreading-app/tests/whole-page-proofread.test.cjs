@@ -39,10 +39,10 @@ test('batch retries only failed pages and leaves successful pages untouched', as
   assert.match(result.errors.get(3).message, /persistent/);
 });
 
-test('the inverted first page defaults upright for the original and reopened 24-page book', () => {
-  assert.equal(defaultPreviewRotation('a3a76874e921481e9d1bd53626f40e99', '1.pdf', 24, 1), 180);
-  assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 1), 180);
-  assert.equal(defaultPreviewRotation('new-project-id', '藏文/1.pdf', 24, 1), 180);
+test('the reuploaded 1.pdf first page keeps its upright PDF orientation', () => {
+  assert.equal(defaultPreviewRotation('a3a76874e921481e9d1bd53626f40e99', '1.pdf', 24, 1), 0);
+  assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 1), 0);
+  assert.equal(defaultPreviewRotation('new-project-id', '藏文/1.pdf', 24, 1), 0);
   assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 2), 0);
   assert.equal(defaultPreviewRotation('another-book', 'other.pdf', 24, 1), 0);
 });
@@ -50,15 +50,19 @@ test('the inverted first page defaults upright for the original and reopened 24-
 test('page and document turns accumulate and wrap at a full circle', () => {
   assert.equal(normalizeRotation(-90), 270);
   assert.deepEqual([1, 2, 3, 4].map(turns => normalizeRotation(turns * 90)), [90, 180, 270, 0]);
-  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 0, 0), 180);
-  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 90, 90), 0);
+  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 0, 0), 0);
+  assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 1, 90, 90), 180);
   assert.equal(effectivePreviewRotation('new-project-id', '1.pdf', 24, 2, 90, 0), 90);
 });
 
 test('page and document rotation use direct buttons without a choice menu', () => {
   const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  const script = readFileSync(join(__dirname, '../whole-page-proofread.js'), 'utf8');
   assert.match(html, /<button id="rotatePage"[^>]*type="button"/);
   assert.match(html, /<button id="rotateDocument"[^>]*type="button"/);
+  assert.match(html, /id="pageScanFrame"/);
+  assert.match(script, /scan\.style\.transform = `translate\(-50%, -50%\) rotate/);
+  assert.match(script, /if \(scan\.dataset\.source !== source\)/);
   assert.doesNotMatch(html, /rotatePageMenu|rotateDocumentMenu|rotation-menu/);
 });
 
