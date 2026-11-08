@@ -2,7 +2,15 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, parseExportPages, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+
+test('Gemini export selects ordered pages and preserves page headings', () => {
+  assert.deepEqual(parseExportPages('', 5, 2), [2]);
+  assert.deepEqual(parseExportPages('5, 1,3-4,3', 5, 2), [1, 3, 4, 5]);
+  assert.equal(buildGeminiExport({ '1': 'ཀ\nཁ', '3': 'ག' }, [1, 3]), '第 1 页\nཀ\nཁ\n\n第 3 页\nག\n');
+  assert.throws(() => buildGeminiExport({ '1': 'ཀ' }, [1, 2]), /第 2 页没有/);
+  assert.throws(() => parseExportPages('2-6', 5, 1), /1–5/);
+});
 
 test('a whole-book baseline remains selectable when only another page has model text', () => {
   const pages = { teacher: { '1': '', '2': 'ཀ་ཁ' }, yigdzin1: { '1': '  ' } };

@@ -48,6 +48,25 @@
     }).join('\n\n') + '\n';
   }
 
+  function parseExportPages(input, pageCount, currentPage) {
+    const pages = new Set();
+    for (const item of (String(input || '').trim() || String(currentPage)).split(/[,，、]/)) {
+      const match = item.trim().match(/^(\d+)(?:\s*[-–—]\s*(\d+))?$/);
+      if (!match) throw new Error('页码格式应为 1,3-5');
+      const first = Number(match[1]);
+      const last = Number(match[2] || match[1]);
+      if (first < 1 || last > pageCount || first > last) throw new Error(`页码须在 1–${pageCount} 页范围内，且起始页不大于结束页`);
+      for (let page = first; page <= last; page += 1) pages.add(page);
+    }
+    return [...pages].sort((a, b) => a - b);
+  }
+
+  function buildGeminiExport(pages, selectedPages) {
+    const missing = selectedPages.filter(page => !String(pages?.[String(page)] || '').trim());
+    if (missing.length) throw new Error(`第 ${missing.join('、')} 页没有 Gemini 4 识别结果`);
+    return selectedPages.map(page => `第 ${page} 页\n${String(pages[String(page)]).replace(/\r\n?/g, '\n').trim()}`).join('\n\n') + '\n';
+  }
+
   function graphemes(text) {
     if (typeof Intl.Segmenter === 'function') {
       return [...new Intl.Segmenter('bo', { granularity: 'grapheme' }).segment(text)].map(part => part.segment);
@@ -152,7 +171,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, parseExportPages, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -561,6 +580,27 @@
     finally { state.exporting = false; $('exportCorrected').disabled = !state.count; }
   }
 
+  function exportGemini() {
+    const notice = $('geminiRecognitionFeedback');
+    try {
+      if (!state.count) throw new Error('请先打开 PDF 项目');
+      const selected = parseExportPages($('geminiExportPages').value, state.count, state.page);
+      const content = buildGeminiExport(state.pages.gemini4, selected);
+      const baseName = String(state.sourceName || '藏文文档').split(/[\\/]/).pop().replace(/\.[^.]+$/, '')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || '藏文文档';
+      const url = root.URL.createObjectURL(new Blob(['\uFEFF', content], { type: 'text/plain;charset=utf-8' }));
+      const link = root.document.createElement('a');
+      link.href = url;
+      link.download = `${baseName}_Gemini4_第${selected.join('-')}页.txt`;
+      root.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      root.setTimeout(() => root.URL.revokeObjectURL(url), 2000);
+      notice.textContent = '';
+      feedback(`已导出 Gemini 4 第 ${selected.join('、')} 页识别结果。`);
+    } catch (error) { notice.textContent = `Gemini 4 导出失败：${error.message}`; }
+  }
+
   async function goToPage(page) {
     if (!Number.isInteger(page) || page < 1 || page > state.count) return;
     if (page === state.page) return;
@@ -683,6 +723,7 @@
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
   $('saveCorrected').addEventListener('click', () => void saveCorrected());
   $('exportCorrected').addEventListener('click', () => void exportCorrected());
+  $('exportGemini').addEventListener('click', exportGemini);
   $('recognizeGemini').addEventListener('click', () => void recognizeGeminiPage());
   $('recognizeOpenAI').addEventListener('click', () => void recognizeOpenAIPage());
   $('recognizeOpenAIAllPages').addEventListener('click', () => void recognizeOpenAIBatch('all'));
