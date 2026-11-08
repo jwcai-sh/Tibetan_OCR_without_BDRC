@@ -76,7 +76,11 @@ test('page and document rotation use direct buttons without a choice menu', () =
 
 test('whole-book export is in the global toolbar while page save stays in its card', () => {
   const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  const geminiExportAt = html.indexOf('id="exportGeminiBook"');
   const exportAt = html.indexOf('id="exportCorrected"');
+  assert.ok(geminiExportAt > html.indexOf('<div class="toolbar">'));
+  assert.ok(geminiExportAt < exportAt);
+  assert.match(html.slice(geminiExportAt, geminiExportAt + 100), /导出整书 Gemini 4 识别版/);
   assert.ok(exportAt > html.indexOf('<div class="toolbar">'));
   assert.ok(exportAt < html.indexOf('<nav id="pageIndex"'));
   assert.match(html.slice(exportAt, exportAt + 100), /导出整本正确版 TXT/);
