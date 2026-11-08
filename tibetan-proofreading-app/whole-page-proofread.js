@@ -48,19 +48,6 @@
     }).join('\n\n') + '\n';
   }
 
-  function parseExportPages(input, pageCount, currentPage) {
-    const pages = new Set();
-    for (const item of (String(input || '').trim() || String(currentPage)).split(/[,，、]/)) {
-      const match = item.trim().match(/^(\d+)(?:\s*[-–—]\s*(\d+))?$/);
-      if (!match) throw new Error('页码格式应为 1,3-5');
-      const first = Number(match[1]);
-      const last = Number(match[2] || match[1]);
-      if (first < 1 || last > pageCount || first > last) throw new Error(`页码须在 1–${pageCount} 页范围内，且起始页不大于结束页`);
-      for (let page = first; page <= last; page += 1) pages.add(page);
-    }
-    return [...pages].sort((a, b) => a - b);
-  }
-
   function buildGeminiExport(pages, selectedPages) {
     const missing = selectedPages.filter(page => !String(pages?.[String(page)] || '').trim());
     if (missing.length) throw new Error(`第 ${missing.join('、')} 页没有 Gemini 4 识别结果`);
@@ -171,7 +158,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, parseExportPages, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -580,30 +567,23 @@
     finally { state.exporting = false; $('exportCorrected').disabled = !state.count; }
   }
 
-  function exportGemini(wholeBook = false) {
-    const notice = $('geminiRecognitionFeedback');
+  function exportGeminiBook() {
     try {
       if (!state.count) throw new Error('请先打开 PDF 项目');
-      const selected = wholeBook
-        ? Array.from({ length: state.count }, (_, index) => index + 1)
-        : parseExportPages($('geminiExportPages').value, state.count, state.page);
+      const selected = Array.from({ length: state.count }, (_, index) => index + 1);
       const content = buildGeminiExport(state.pages.gemini4, selected);
       const baseName = String(state.sourceName || '藏文文档').split(/[\\/]/).pop().replace(/\.[^.]+$/, '')
         .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || '藏文文档';
       const url = root.URL.createObjectURL(new Blob(['\uFEFF', content], { type: 'text/plain;charset=utf-8' }));
       const link = root.document.createElement('a');
       link.href = url;
-      link.download = wholeBook ? `${baseName}_整书Gemini4识别版.txt` : `${baseName}_Gemini4_第${selected.join('-')}页.txt`;
+      link.download = `${baseName}_整书Gemini4识别版.txt`;
       root.document.body.appendChild(link);
       link.click();
       link.remove();
       root.setTimeout(() => root.URL.revokeObjectURL(url), 2000);
-      notice.textContent = '';
-      feedback(wholeBook ? `已导出整书 Gemini 4 识别结果，共 ${state.count} 页。` : `已导出 Gemini 4 第 ${selected.join('、')} 页识别结果。`);
-    } catch (error) {
-      if (wholeBook) feedback(`整书 Gemini 4 导出失败：${error.message}`, true);
-      else notice.textContent = `Gemini 4 导出失败：${error.message}`;
-    }
+      feedback(`已导出整书 Gemini 4 识别结果，共 ${state.count} 页。`);
+    } catch (error) { feedback(`整书 Gemini 4 导出失败：${error.message}`, true); }
   }
 
   async function goToPage(page) {
@@ -728,8 +708,7 @@
   $('pageInput').addEventListener('change', () => void goToPage(Number($('pageInput').value)));
   $('saveCorrected').addEventListener('click', () => void saveCorrected());
   $('exportCorrected').addEventListener('click', () => void exportCorrected());
-  $('exportGemini').addEventListener('click', () => exportGemini());
-  $('exportGeminiBook').addEventListener('click', () => exportGemini(true));
+  $('exportGeminiBook').addEventListener('click', exportGeminiBook);
   $('recognizeGemini').addEventListener('click', () => void recognizeGeminiPage());
   $('recognizeOpenAI').addEventListener('click', () => void recognizeOpenAIPage());
   $('recognizeOpenAIAllPages').addEventListener('click', () => void recognizeOpenAIBatch('all'));
