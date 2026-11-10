@@ -26,7 +26,14 @@ test('selected model is the only unmarked baseline and missing baselines do not 
 
 test('saved card order keeps each model once and restores omitted models', () => {
   assert.deepEqual(normalizeModelOrder(['yigdzin1', 'teacher', 'teacher', 'unknown']), ['yigdzin1', 'teacher', 'gemini4', 'openai']);
-  assert.deepEqual(normalizeModelOrder(null), ['gemini4', 'teacher', 'yigdzin1', 'openai']);
+  assert.deepEqual(normalizeModelOrder(null), ['teacher', 'gemini4', 'yigdzin1', 'openai']);
+});
+
+test('teacher card is first and Gemini result shows a per-page source', () => {
+  const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  assert.ok(html.indexOf('id="teacherPanel"') < html.indexOf('id="gemini4Panel"'));
+  assert.match(html, /id="geminiResultSource"/);
+  assert.match(html, /全书差异基准：教师校正稿/);
 });
 
 test('batch retries only failed pages and leaves successful pages untouched', async () => {

@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
 
-  const MODEL_KEYS = ['gemini4', 'teacher', 'yigdzin1', 'openai'];
+  const MODEL_KEYS = ['teacher', 'gemini4', 'yigdzin1', 'openai'];
   const MODEL_LABELS = { gemini4: 'Gemini 4', openai: 'GPT（OpenAI API）', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
 
   function parsePageTextFile(source, pageCount) {
@@ -165,7 +165,7 @@
   const params = new URLSearchParams(root.location.search);
   const bookId = params.get('book_id') || '';
   $('topImportControls').hidden = Boolean(bookId);
-  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'gemini4', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
+  const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, pageSources: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'teacher', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
   const rotationKey = scope => {
@@ -173,8 +173,8 @@
       || (state.sourceName.trim().split(/[\\/]/).pop().toLowerCase() === '1.pdf' && state.count === 24);
     return `whole-page-preview-rotation-${oldInvertedBook ? 'v3' : 'v2'}:${bookId}:${scope}`;
   };
-  const modelOrderKey = `whole-page-model-order:${bookId}`;
-  const baselineKey = `whole-page-baseline:${bookId}`;
+  const modelOrderKey = `whole-page-model-order-v2:${bookId}`;
+  const baselineKey = `whole-page-baseline-v2:${bookId}`;
 
   function storedRotation(scope) {
     try {
@@ -189,7 +189,7 @@
       order = JSON.parse(root.localStorage.getItem(modelOrderKey));
       const savedBaseline = root.localStorage.getItem(baselineKey);
       if (MODEL_KEYS.includes(savedBaseline) && !$(`${savedBaseline}Panel`).hidden) state.baselineKey = savedBaseline;
-    } catch { /* Default order and Gemini baseline remain usable. */ }
+    } catch { /* Default order and teacher baseline remain usable. */ }
     for (const key of normalizeModelOrder(order)) $('modelCards').appendChild($(`${key}Panel`));
   }
 
@@ -292,6 +292,12 @@
     baselineButton.setAttribute('aria-pressed', String(key === state.baselineKey));
     baselineButton.textContent = key === state.baselineKey ? '当前全书基准' : '设为全书基准';
     const text = state.pages[key]?.[String(state.page)] || '';
+    if (key === 'gemini4') {
+      const source = state.pageSources[String(state.page)];
+      $('geminiResultSource').textContent = !text ? '本页无结果' : source === 'api_recognition'
+        ? '本页来源：工作台 API 识别' : source === 'txt_import'
+          ? '本页来源：上传的 TXT' : '本页来源：旧结果未记录';
+    }
     panel.querySelector('.fill-corrected').disabled = !text;
     baselineButton.disabled = !hasAnyModelText(state.pages, key);
     if (!text) {
@@ -394,6 +400,7 @@
       });
       state.pages.gemini4[String(page)] = saved.text;
       state.pageModels[String(page)] = saved.model;
+      state.pageSources[String(page)] = saved.source;
       if (state.page === page) renderAllCandidates();
       return saved;
   }
@@ -610,6 +617,7 @@
       state.pages[key] = { ...(state.pages[key] || {}), ...pages };
       if (key === 'gemini4') {
         state.pageModels = {};
+        state.pageSources = Object.fromEntries(Object.keys(pages).map(page => [page, 'txt_import']));
       }
       if (key === state.baselineKey) renderAllCandidates();
       else renderCandidate(key);
@@ -809,6 +817,7 @@
       state.pages = Object.fromEntries(models.map(([key, result]) => [key, result.pages || {}]));
       $('exportGeminiBook').disabled = false;
       state.pageModels = models.find(([key]) => key === 'gemini4')?.[1]?.page_models || {};
+      state.pageSources = models.find(([key]) => key === 'gemini4')?.[1]?.page_sources || {};
       state.openaiPageModels = models.find(([key]) => key === 'openai')?.[1]?.page_models || {};
       updateRecognitionControls();
       await loadPage(Math.min(state.count, state.page));

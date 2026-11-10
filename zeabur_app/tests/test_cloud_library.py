@@ -271,7 +271,9 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(self.client.put(endpoint, json={"pages": {"1": "བོད་"}}).status_code, 400)
         response = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.get(endpoint).json()["pages"]["2"], "ཡིག་")
+        saved = self.client.get(endpoint).json()
+        self.assertEqual(saved["pages"]["2"], "ཡིག་")
+        self.assertEqual(saved["page_sources"], {"1": "txt_import", "2": "txt_import"})
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "人工校对")
 
     def test_whole_page_candidates_and_corrected_page_are_isolated(self):
@@ -294,7 +296,7 @@ class CloudLibraryTest(unittest.TestCase):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
         book_id = book["book_id"]
         main.write_json(book_id, "state.json", {"page_count": 2, "ocr_results": {"1": {"text": "原校对"}}})
-        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "旧一页", "2": "旧二页"}})
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "旧一页", "2": "旧二页"}, "page_sources": {"1": "txt_import", "2": "txt_import"}})
         endpoint = f"/api/books/{book_id}/model-results/gemini4/pages/1"
         with patch.object(main, "load_ai_ocr_module", return_value=SimpleNamespace(GEMINI_REVIEW_MODELS=["gemini-3.8-flash"])):
             self.assertEqual(self.client.put(endpoint, json={"text": "", "model": "gemini:gemini-3.8-flash"}).status_code, 400)
@@ -303,6 +305,8 @@ class CloudLibraryTest(unittest.TestCase):
         saved = self.client.get(f"/api/books/{book_id}/model-results/gemini4").json()
         self.assertEqual(saved["pages"], {"1": "བོད་", "2": "旧二页"})
         self.assertEqual(saved["page_models"]["1"], "gemini:gemini-3.8-flash")
+        self.assertEqual(saved["page_sources"], {"1": "api_recognition", "2": "txt_import"})
+        self.assertEqual(result.json()["source"], "api_recognition")
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "原校对")
 
     def test_single_openai_recognition_preserves_gemini_and_corrected_text(self):

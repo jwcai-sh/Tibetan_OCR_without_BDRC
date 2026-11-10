@@ -684,6 +684,7 @@ async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     result = {
         "model": "Gemini 4",
         "pages": {str(page): pages[str(page)].strip() for page in range(1, page_count + 1)},
+        "page_sources": {str(page): "txt_import" for page in range(1, page_count + 1)},
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import",
     }
@@ -716,13 +717,15 @@ async def put_gemini_page_result(book_id: str, page_num: int, request: Request) 
             result = {"model": "Gemini 4", "pages": {}}
         pages = dict(result.get("pages") or {})
         page_models = dict(result.get("page_models") or {})
+        page_sources = dict(result.get("page_sources") or {})
         pages[str(page_num)] = text.strip()
         page_models[str(page_num)] = f"gemini:{model.removeprefix('gemini:')}"
-        result.update({"pages": pages, "page_models": page_models,
+        page_sources[str(page_num)] = "api_recognition"
+        result.update({"pages": pages, "page_models": page_models, "page_sources": page_sources,
                        "updated_at": datetime.now(timezone.utc).isoformat(),
                        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "recognition"})
         write_json(book_id, "model-results/gemini4.json", result)
-    return {"ok": True, "page_num": page_num, "text": pages[str(page_num)], "model": page_models[str(page_num)]}
+    return {"ok": True, "page_num": page_num, "text": pages[str(page_num)], "model": page_models[str(page_num)], "source": page_sources[str(page_num)]}
 
 
 @app.put("/api/books/{book_id}/model-results/openai/pages/{page_num}")
