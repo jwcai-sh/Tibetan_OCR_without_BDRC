@@ -672,11 +672,9 @@ gemini_result_lock = threading.Lock()
 
 @app.put("/api/books/{book_id}/model-results/gemini4")
 async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
-    metadata = read_json(book_id, "metadata.json")
     payload = await request.json()
     pages = payload.get("pages") if isinstance(payload, dict) else None
-    book_state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
-    page_count = int(book_state.get("page_count") or book_state.get("pageCount") or 0)
+    page_count = whole_page_book_count(book_id)
     if not isinstance(pages, dict) or not pages or not page_count:
         raise HTTPException(400, "Gemini TXT 至少需要一页非空识别文本")
     if any(not str(page).isdigit() or not 1 <= int(page) <= page_count for page in pages):

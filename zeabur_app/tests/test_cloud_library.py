@@ -284,6 +284,22 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(full_import.json()["page_count"], 2)
         self.assertEqual(self.client.get(endpoint).json()["page_sources"], {"1": "txt_import", "2": "txt_import"})
 
+    def test_gemini4_import_uses_pdf_pages_when_book_state_count_is_zero(self):
+        document = fitz.open()
+        document.new_page()
+        document.new_page()
+        pdf = document.tobytes()
+        document.close()
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        self.assertEqual(main.read_json(book_id, "state.json")["page_count"], 0)
+        endpoint = f"/api/books/{book_id}/model-results/gemini4"
+        with patch.object(main, "cached_pdf_source", return_value=pdf):
+            response = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["page_count"], 2)
+        self.assertEqual(self.client.get(endpoint).json()["page_sources"], {"1": "txt_import", "2": "txt_import"})
+
     def test_whole_page_candidates_and_corrected_page_are_isolated(self):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
         book_id = book["book_id"]
