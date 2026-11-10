@@ -55,6 +55,17 @@ test('batch retries only failed pages and leaves successful pages untouched', as
   assert.match(result.errors.get(3).message, /persistent/);
 });
 
+test('batch does not call Gemini again when saving an already generated page fails', async () => {
+  const attempts = [];
+  const result = await recognizeWithRetries([1, 2], async page => {
+    attempts.push(page);
+    if (page === 1) throw Object.assign(new Error('cloud save failed'), { noRetry: true });
+  }, { wait: async () => {} });
+  assert.deepEqual(attempts, [1, 2]);
+  assert.equal(result.completed, 1);
+  assert.deepEqual(result.failed, [1]);
+});
+
 test('the reuploaded 1.pdf first page keeps its upright PDF orientation', () => {
   assert.equal(defaultPreviewRotation('a3a76874e921481e9d1bd53626f40e99', '1.pdf', 24, 1), 0);
   assert.equal(defaultPreviewRotation('new-project-id', '1.pdf', 24, 1), 0);

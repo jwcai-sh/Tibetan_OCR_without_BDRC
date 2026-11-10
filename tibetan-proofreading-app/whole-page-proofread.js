@@ -140,6 +140,7 @@
     let pending = [...pages];
     let completed = 0;
     const errors = new Map();
+    const saveFailures = new Set();
     for (let round = 1; round <= 3 && pending.length && !shouldStop(); round += 1) {
       if (round > 1) await wait(round === 2 ? 3000 : 6000);
       const failed = [];
@@ -147,11 +148,15 @@
         if (shouldStop()) break;
         onAttempt(page, round, completed, pages.length);
         try { await recognize(page); completed += 1; errors.delete(page); }
-        catch (error) { failed.push(page); errors.set(page, error); }
+        catch (error) {
+          if (error?.noRetry) saveFailures.add(page);
+          else failed.push(page);
+          errors.set(page, error);
+        }
       }
       pending = failed;
     }
-    return { completed, failed: pending, errors, stopped: shouldStop() };
+    return { completed, failed: [...saveFailures, ...pending], errors, stopped: shouldStop() };
   }
 
   function normalizeRotation(degrees) {
@@ -176,6 +181,8 @@
   const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, pageSources: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'teacher', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
+  const pendingGeminiKey = page => `whole-page-gemini-unsaved:${bookId}:${page}`;
+  const pendingGemini = new Map();
   const rotationKey = scope => {
     const oldInvertedBook = bookId === 'a3a76874e921481e9d1bd53626f40e99'
       || (state.sourceName.trim().split(/[\\/]/).pop().toLowerCase() === '1.pdf' && state.count === 24);
@@ -359,6 +366,7 @@
     state.page = page;
     const token = ++state.pageRequest;
     $('geminiRecognitionFeedback').textContent = '';
+    renderPendingGemini(page);
     $('openaiRecognitionFeedback').textContent = state.openaiConfigured ? '' : '服务端尚未配置 OpenAI API key 和模型；请在 Zeabur 服务环境变量中设置 OPENAI_API_KEY、OPENAI_REVIEW_MODEL。';
     const pageModel = String(state.pageModels[String(page)] || '').replace(/^gemini:/, '');
     if (pageModel && [...$('geminiRecognitionModel').options].some(option => option.value === pageModel && !option.disabled)) $('geminiRecognitionModel').value = pageModel;
@@ -389,7 +397,106 @@
     $('stopOpenAIBatchRecognition').hidden = !state.batchRecognizing || state.batchProvider !== 'openai';
   }
 
+  function loadPendingGemini(page) {
+    if (pendingGemini.has(page)) return pendingGemini.get(page);
+    try {
+      const saved = JSON.parse(root.localStorage.getItem(pendingGeminiKey(page)) || 'null');
+      if (saved?.text && saved?.model) {
+        const pending = { ...saved, localStored: true };
+        pendingGemini.set(page, pending);
+        return pending;
+      }
+    } catch { /* An in-memory copy remains available for this tab. */ }
+    return null;
+  }
+
+  function keepPendingGemini(page, result) {
+    const pending = { text: result.text, model: result.model, localStored: false };
+    pendingGemini.set(page, pending);
+    try {
+      root.localStorage.setItem(pendingGeminiKey(page), JSON.stringify({ text: result.text, model: result.model }));
+      pending.localStored = true;
+    } catch { /* The download button remains available while this tab is open. */ }
+  }
+
+  function clearPendingGemini(page) {
+    pendingGemini.delete(page);
+    try { root.localStorage.removeItem(pendingGeminiKey(page)); } catch { /* Cloud save succeeded. */ }
+  }
+
+  function downloadPendingGemini(page, pending) {
+    const blob = new Blob([`第 ${page} 页\n${pending.text}\n`], { type: 'text/plain;charset=utf-8' });
+    const url = root.URL.createObjectURL(blob);
+    const link = root.document.createElement('a');
+    link.href = url;
+    link.download = `${state.sourceName.split(/[\\/]/).pop() || 'book'}-Gemini-第${page}页-未保存.txt`;
+    root.document.body.appendChild(link);
+    link.click();
+    link.remove();
+    root.setTimeout(() => root.URL.revokeObjectURL(url), 2000);
+  }
+
+  function renderPendingGemini(page, notice = '') {
+    const target = $('geminiRecognitionFeedback');
+    target.replaceChildren();
+    const pending = loadPendingGemini(page);
+    if (!pending) { target.textContent = notice; return; }
+    if (state.pages.gemini4?.[String(page)] === pending.text) {
+      clearPendingGemini(page);
+      target.textContent = notice;
+      return;
+    }
+    const message = root.document.createElement('span');
+    message.textContent = `${notice ? `${notice} ` : ''}第 ${page} 页已生成识别文字，但尚未写入云端。${pending.localStored ? '本机浏览器已暂存。' : '本机暂存失败，请立即下载。'}`;
+    const retry = root.document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试保存（不重新识别）';
+    retry.addEventListener('click', () => void retryPendingGemini(page));
+    const download = root.document.createElement('button');
+    download.type = 'button';
+    download.textContent = '下载本页识别 TXT';
+    download.addEventListener('click', () => downloadPendingGemini(page, pending));
+    target.append(message, ' ', retry, ' ', download);
+  }
+
+  async function saveGeminiResult(page, result) {
+    let saved;
+    try {
+      saved = await requestJson(endpoint(`/model-results/gemini4/pages/${page}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: result.text, model: result.model }),
+      });
+    } catch (error) {
+      error.noRetry = true;
+      throw error;
+    }
+    state.pages.gemini4[String(page)] = saved.text;
+    state.pageModels[String(page)] = saved.model;
+    state.pageSources[String(page)] = saved.source;
+    clearPendingGemini(page);
+    if (state.page === page) { renderAllCandidates(); renderPendingGemini(page); }
+    return saved;
+  }
+
+  async function retryPendingGemini(page) {
+    const pending = loadPendingGemini(page);
+    if (!pending || state.recognizing || state.batchRecognizing) return;
+    state.recognizing = true;
+    updateRecognitionControls();
+    try {
+      await saveGeminiResult(page, pending);
+      feedback(`第 ${page} 页 Gemini 识别结果已保存到云端。`);
+    } catch (error) {
+      renderPendingGemini(page, `重试保存失败：${error.message}`);
+      feedback(`第 ${page} 页识别文字仍未保存：${error.message}`, true);
+    } finally {
+      state.recognizing = false;
+      updateRecognitionControls();
+    }
+  }
+
   async function recognizeGeminiResult(page, model) {
+      const pending = loadPendingGemini(page);
+      if (pending) return saveGeminiResult(page, pending);
       const job = await requestJson(endpoint('/gemini-recognition-jobs'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_num: page, model }),
       });
@@ -403,14 +510,8 @@
       }
       if (!result) throw new Error('识别等待超时，请稍后重试');
       if (result.model !== `gemini:${model}` || !result.text?.trim()) throw new Error('模型身份或识别文本无效，原结果保留');
-      const saved = await requestJson(endpoint(`/model-results/gemini4/pages/${page}`), {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: result.text, model: result.model }),
-      });
-      state.pages.gemini4[String(page)] = saved.text;
-      state.pageModels[String(page)] = saved.model;
-      state.pageSources[String(page)] = saved.source;
-      if (state.page === page) renderAllCandidates();
-      return saved;
+      keepPendingGemini(page, result);
+      return saveGeminiResult(page, result);
   }
 
   async function recognizeGeminiPage() {
@@ -420,13 +521,13 @@
     state.recognizing = true;
     updateRecognitionControls();
     $('geminiRecognitionFeedback').textContent = '';
-    feedback(`第 ${page} 页正在用 ${model} 识别…`);
+    feedback(loadPendingGemini(page) ? `第 ${page} 页正在重试保存已有识别结果…` : `第 ${page} 页正在用 ${model} 识别…`);
     try {
       await recognizeGeminiResult(page, model);
       feedback(`第 ${page} 页 ${geminiLabel(page)} 识别结果已保存到云端。人工正确版仍需单独保存。`);
     } catch (error) {
       const message = `第 ${page} 页识别失败：${error.message}；原结果保留。`;
-      $('geminiRecognitionFeedback').textContent = message;
+      renderPendingGemini(page, message);
       feedback(message, true);
     } finally {
       state.recognizing = false;
@@ -455,7 +556,7 @@
     state.batchStop = false;
     updateRecognitionControls();
     const summary = `批量识别${stopped ? '已停止' : '已结束'}：成功 ${completed}/${pages.length} 页${failed.length ? `；重试后仍失败：第 ${failed.join('、')} 页` : ''}。已保存的正确版未修改。`;
-    $('geminiRecognitionFeedback').textContent = failed.length ? summary : '';
+    renderPendingGemini(state.page, failed.length ? summary : '');
     feedback(summary, Boolean(failed.length));
   }
 

@@ -675,6 +675,21 @@ def get_gemini4_results(book_id: str) -> dict[str, Any]:
 gemini_result_lock = threading.Lock()
 
 
+def archive_gemini_result(book_id: str, kind: str, payload: dict[str, Any]) -> None:
+    """Keep each paid recognition and previous aggregate under a unique OSS key."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = f"model-results/gemini4-history/{stamp}-{uuid.uuid4().hex}-{kind}.json"
+    try:
+        oss_bucket().put_object(
+            object_key(book_id, suffix),
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8", "x-oss-forbid-overwrite": "true"},
+        )
+    except Exception as exc:
+        logging.warning("Gemini result archive failed for book %s: %s", book_id, type(exc).__name__)
+        raise HTTPException(503, "Gemini 识别结果备份失败，已停止覆盖原结果；请保留本页识别文本并稍后重试") from exc
+
+
 def imported_gemini_results(book_id: str) -> dict[str, Any]:
     try:
         legacy = read_json(book_id, "model-results/gemini4.json")
@@ -744,8 +759,14 @@ async def put_gemini_page_result(book_id: str, page_num: int, request: Request) 
             if exc.status_code != 404:
                 raise
             result = {"model": "Gemini 4", "pages": {}}
-        imported = imported_gemini_results(book_id)
-        if imported["pages"]:
+        archive_gemini_result(book_id, "incoming", {
+            "page_num": page_num, "model": f"gemini:{model.removeprefix('gemini:')}", "text": text.strip(),
+        })
+        if result.get("pages"):
+            archive_gemini_result(book_id, "previous", result)
+        if any(source == "txt_import" for source in (result.get("page_sources") or {}).values()):
+            imported = imported_gemini_results(book_id)
+            archive_gemini_result(book_id, "previous-import", imported)
             write_json(book_id, "model-results/gemini_import.json", imported)
         pages = dict(result.get("pages") or {})
         page_models = dict(result.get("page_models") or {})

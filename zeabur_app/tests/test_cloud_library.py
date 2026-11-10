@@ -349,6 +349,49 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(result.json()["source"], "api_recognition")
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "原校对")
 
+    def test_gemini_recognition_archives_new_and_previous_text_per_book(self):
+        book_id = "a" * 32
+        other_id = "b" * 32
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "付费旧结果"}})
+        main.write_json(other_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "另一册结果"}})
+        original_put = self.bucket.put_object
+        calls = []
+
+        def record_put(key, body, headers=None):
+            calls.append((key, headers))
+            return original_put(key, body, headers=headers)
+
+        endpoint = f"/api/books/{book_id}/model-results/gemini4/pages/1"
+        with patch.object(main, "whole_page_book_count", return_value=2), \
+                patch.object(main, "load_ai_ocr_module", return_value=SimpleNamespace(GEMINI_REVIEW_MODELS=["test"])), \
+                patch.object(self.bucket, "put_object", side_effect=record_put):
+            response = self.client.put(endpoint, json={"text": "付费新结果", "model": "gemini:test"})
+        self.assertEqual(response.status_code, 200, response.text)
+        history = {key: json.loads(body) for key, body in self.bucket.objects.items() if "gemini4-history/" in key}
+        self.assertEqual(len(history), 2)
+        self.assertEqual(next(value for key, value in history.items() if key.endswith("-incoming.json"))["text"], "付费新结果")
+        self.assertEqual(next(value for key, value in history.items() if key.endswith("-previous.json"))["pages"]["1"], "付费旧结果")
+        self.assertTrue(all(headers["x-oss-forbid-overwrite"] == "true" for key, headers in calls if "gemini4-history/" in key))
+        self.assertEqual(main.read_json(other_id, "model-results/gemini4.json")["pages"]["1"], "另一册结果")
+        self.assertFalse(any(f"books/{other_id}/model-results/gemini4-history/" in key for key in history))
+
+    def test_gemini_recognition_keeps_current_result_when_archive_fails(self):
+        book_id = "a" * 32
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "付费旧结果"}})
+        original_put = self.bucket.put_object
+
+        def fail_archive(key, body, headers=None):
+            if "gemini4-history/" in key:
+                raise RuntimeError("storage unavailable")
+            return original_put(key, body, headers=headers)
+
+        with patch.object(main, "whole_page_book_count", return_value=1), \
+                patch.object(main, "load_ai_ocr_module", return_value=SimpleNamespace(GEMINI_REVIEW_MODELS=["test"])), \
+                patch.object(self.bucket, "put_object", side_effect=fail_archive):
+            response = self.client.put(f"/api/books/{book_id}/model-results/gemini4/pages/1", json={"text": "付费新结果", "model": "gemini:test"})
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(main.read_json(book_id, "model-results/gemini4.json")["pages"]["1"], "付费旧结果")
+
     def test_single_openai_recognition_preserves_gemini_and_corrected_text(self):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
         book_id = book["book_id"]
