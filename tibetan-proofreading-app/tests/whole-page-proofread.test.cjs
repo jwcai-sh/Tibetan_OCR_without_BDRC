@@ -40,6 +40,13 @@ test('teacher card is first and Gemini result shows a per-page source', () => {
   assert.match(html, /全书差异基准：教师校正稿/);
 });
 
+test('Gemini online card is hidden while imported TXT remains visible', () => {
+  const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
+  assert.match(html, /<details id="gemini4Panel"[^>]*\shidden>/);
+  assert.match(html, /<details id="gemini_importPanel"[^>]*\sopen>/);
+  assert.doesNotMatch(html, /<details id="gemini_importPanel"[^>]*\shidden>/);
+});
+
 test('batch retries only failed pages and leaves successful pages untouched', async () => {
   const attempts = [];
   const waits = [];
