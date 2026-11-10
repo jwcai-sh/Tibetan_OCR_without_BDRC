@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
 
 test('Gemini export preserves page headings and rejects missing recognition', () => {
   assert.equal(buildGeminiExport({ '1': 'ཀ\nཁ', '3': 'ག' }, [1, 3]), '第 1 页\nཀ\nཁ\n\n第 3 页\nག\n');
@@ -138,6 +138,12 @@ test('accepts selected pages and keeps a deliberately empty page', () => {
   assert.throws(() => parsePageTextFile('没有页标', 2), /第…页/);
   assert.throws(() => parsePageTextFile('第 3 页\nཀ་', 2), /范围/);
   assert.throws(() => parsePageTextFile('第 1 页\nཀ་\n第 1 页\nཁ་', 2), /重复/);
+});
+
+test('Gemini import skips blank headings without erasing other pages', () => {
+  const parsed = parsePageTextFile('第 1 页\nཀ་\n第 2 页\n', 3);
+  assert.deepEqual(prepareGeminiImportPages(parsed), { pages: { '1': 'ཀ་' }, emptyPages: ['2'] });
+  assert.throws(() => prepareGeminiImportPages({ '2': '' }), /第 2 页均为空/);
 });
 
 test('imports pages separated by the Mingdeng OCR TXT headings', () => {

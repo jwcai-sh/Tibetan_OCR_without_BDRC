@@ -48,6 +48,13 @@
     }).join('\n\n') + '\n';
   }
 
+  function prepareGeminiImportPages(parsedPages) {
+    const emptyPages = Object.keys(parsedPages).filter(page => !parsedPages[page].trim());
+    const pages = Object.fromEntries(Object.entries(parsedPages).filter(([, text]) => text.trim()));
+    if (!Object.keys(pages).length) throw new Error(`TXT 中第 ${emptyPages.join('、')} 页均为空，未覆盖云端结果`);
+    return { pages, emptyPages };
+  }
+
   function buildGeminiExport(pages, selectedPages) {
     const missing = selectedPages.filter(page => !String(pages?.[String(page)] || '').trim());
     if (missing.length) throw new Error(`第 ${missing.join('、')} 页没有 Gemini 4 识别结果`);
@@ -158,7 +165,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -601,30 +608,40 @@
   }
 
   async function importModel(key, file) {
+    const importNotice = key === 'gemini4' ? $('geminiRecognitionFeedback') : null;
+    if (importNotice) importNotice.textContent = '';
     try {
       if (!bookId || !state.count) throw new Error('请先导入 PDF 项目');
       const sourceText = await file.text();
       const hasPageHeadings = /^[^\n]*?第[ \t]*[0-9０-９]+[ \t]*页[^\n]*$/m.test(sourceText);
-      const pages = parsePageTextFile(sourceText, state.count);
+      const parsedPages = parsePageTextFile(sourceText, state.count);
+      const { pages, emptyPages } = key === 'gemini4'
+        ? prepareGeminiImportPages(parsedPages) : { pages: parsedPages, emptyPages: [] };
       if (!hasPageHeadings && !root.confirm(`此 TXT 没有“第…页”页标，已按 ${Object.keys(pages).length} 个自然分段依次对应当前 PDF 的第 1–${state.count} 页。请确认是同一本书；继续将覆盖这些页现有的 ${MODEL_LABELS[key]} 内容。`)) {
         feedback(`${MODEL_LABELS[key]} 导入已取消。`);
         return;
       }
-      feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页…`);
+      feedback(`正在导入 ${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页${emptyPages.length ? `，跳过空白第 ${emptyPages.join('、')} 页` : ''}…`);
       await requestJson(endpoint(`/model-results/${key}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
       });
       state.pages[key] = { ...(state.pages[key] || {}), ...pages };
       if (key === 'gemini4') {
-        state.pageModels = {};
-        state.pageSources = Object.fromEntries(Object.keys(pages).map(page => [page, 'txt_import']));
+        for (const page of Object.keys(pages)) {
+          delete state.pageModels[page];
+          state.pageSources[page] = 'txt_import';
+        }
       }
       if (key === state.baselineKey) renderAllCandidates();
       else renderCandidate(key);
       updateRecognitionControls();
-      feedback(`${MODEL_LABELS[key]} 已保存到云端。`);
+      feedback(`${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页已保存到云端${emptyPages.length ? `；空白第 ${emptyPages.join('、')} 页已跳过` : ''}。`);
       if (key === 'gemini4') root.document.querySelector('.import-controls').open = false;
-    } catch (error) { feedback(`${MODEL_LABELS[key]} 导入失败：${error.message}`, true); }
+    } catch (error) {
+      const message = `${MODEL_LABELS[key]} 导入失败：${error.message}`;
+      if (importNotice) importNotice.textContent = message;
+      feedback(message, true);
+    }
   }
 
   async function importSource(file) {

@@ -263,18 +263,26 @@ class CloudLibraryTest(unittest.TestCase):
         self.assertEqual(response.headers["content-range"], "bytes 0-4/9")
         self.assertEqual(response.headers["accept-ranges"], "bytes")
 
-    def test_gemini4_import_is_page_complete_and_keeps_proofreading_state(self):
+    def test_gemini4_import_updates_only_supplied_pages_and_keeps_proofreading_state(self):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
         book_id = book["book_id"]
         main.write_json(book_id, "state.json", {"page_count": 2, "ocr_results": {"1": {"text": "人工校对"}}})
         endpoint = f"/api/books/{book_id}/model-results/gemini4"
-        self.assertEqual(self.client.put(endpoint, json={"pages": {"1": "བོད་"}}).status_code, 400)
-        response = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "旧一页", "2": "API 结果"}, "page_models": {"1": "gemini:old", "2": "gemini:old"}, "page_sources": {"1": "api_recognition", "2": "api_recognition"}})
+        self.assertEqual(self.client.put(endpoint, json={"pages": {"1": ""}}).status_code, 400)
+        self.assertEqual(self.client.put(endpoint, json={"pages": {"3": "越界"}}).status_code, 400)
+        response = self.client.put(endpoint, json={"pages": {"1": "བོད་"}})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["page_count"], 1)
         saved = self.client.get(endpoint).json()
-        self.assertEqual(saved["pages"]["2"], "ཡིག་")
-        self.assertEqual(saved["page_sources"], {"1": "txt_import", "2": "txt_import"})
+        self.assertEqual(saved["pages"], {"1": "བོད་", "2": "API 结果"})
+        self.assertEqual(saved["page_models"], {"2": "gemini:old"})
+        self.assertEqual(saved["page_sources"], {"1": "txt_import", "2": "api_recognition"})
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "人工校对")
+        full_import = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
+        self.assertEqual(full_import.status_code, 200)
+        self.assertEqual(full_import.json()["page_count"], 2)
+        self.assertEqual(self.client.get(endpoint).json()["page_sources"], {"1": "txt_import", "2": "txt_import"})
 
     def test_whole_page_candidates_and_corrected_page_are_isolated(self):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()

@@ -667,6 +667,9 @@ def get_gemini4_results(book_id: str) -> dict[str, Any]:
         raise
 
 
+gemini_result_lock = threading.Lock()
+
+
 @app.put("/api/books/{book_id}/model-results/gemini4")
 async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     metadata = read_json(book_id, "metadata.json")
@@ -674,25 +677,33 @@ async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     pages = payload.get("pages") if isinstance(payload, dict) else None
     book_state = collaboration.load_state(book_id, lambda: read_json(book_id, "state.json")) if collaboration.configured() else read_json(book_id, "state.json")
     page_count = int(book_state.get("page_count") or book_state.get("pageCount") or 0)
-    if not isinstance(pages, dict) or not page_count or len(pages) != page_count or any(
-        str(page) not in pages or not isinstance(pages[str(page)], str) or not pages[str(page)].strip()
-        for page in range(1, page_count + 1)
-    ) or any(not str(page).isdigit() or not 1 <= int(page) <= page_count for page in pages):
-        raise HTTPException(400, "Gemini 4 结果必须包含与书籍对应的每一页非空文本")
+    if not isinstance(pages, dict) or not pages or not page_count:
+        raise HTTPException(400, "Gemini TXT 至少需要一页非空识别文本")
+    if any(not str(page).isdigit() or not 1 <= int(page) <= page_count for page in pages):
+        raise HTTPException(400, f"Gemini TXT 页码必须在 1–{page_count} 页范围内")
+    if any(not isinstance(text, str) or not text.strip() for text in pages.values()):
+        raise HTTPException(400, "Gemini TXT 包含空白页，请移除空白页后重试")
     if sum(len(text) for text in pages.values()) > 2_000_000:
         raise HTTPException(413, "Gemini 4 结果过大")
-    result = {
-        "model": "Gemini 4",
-        "pages": {str(page): pages[str(page)].strip() for page in range(1, page_count + 1)},
-        "page_sources": {str(page): "txt_import" for page in range(1, page_count + 1)},
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import",
-    }
-    write_json(book_id, "model-results/gemini4.json", result)
-    return {"ok": True, "page_count": page_count, "updated_at": result["updated_at"]}
-
-
-gemini_result_lock = threading.Lock()
+    with gemini_result_lock:
+        try:
+            result = read_json(book_id, "model-results/gemini4.json")
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            result = {"model": "Gemini 4", "pages": {}}
+        saved_pages = dict(result.get("pages") or {})
+        page_models = dict(result.get("page_models") or {})
+        page_sources = dict(result.get("page_sources") or {})
+        for page, text in pages.items():
+            saved_pages[str(page)] = text.strip()
+            page_models.pop(str(page), None)
+            page_sources[str(page)] = "txt_import"
+        result.update({"pages": saved_pages, "page_models": page_models, "page_sources": page_sources,
+                       "updated_at": datetime.now(timezone.utc).isoformat(),
+                       "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import"})
+        write_json(book_id, "model-results/gemini4.json", result)
+    return {"ok": True, "page_count": len(pages), "updated_at": result["updated_at"]}
 
 
 @app.put("/api/books/{book_id}/model-results/gemini4/pages/{page_num}")
