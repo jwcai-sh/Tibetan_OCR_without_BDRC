@@ -2,7 +2,34 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+const { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, createCorrectedDraftStore, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation } = require('../whole-page-proofread.js');
+
+test('corrected draft falls back to tab storage when localStorage is full', () => {
+  const entries = new Map();
+  const sessionStorage = {
+    getItem: key => entries.get(key) ?? null,
+    setItem: (key, value) => entries.set(key, value),
+    removeItem: key => entries.delete(key),
+  };
+  const localStorage = {
+    getItem: () => null,
+    setItem: () => { throw new Error('QuotaExceededError'); },
+    removeItem: () => {},
+  };
+  const root = { localStorage, sessionStorage };
+  const draft = createCorrectedDraftStore(root, page => `draft:${page}`);
+  assert.equal(draft.set(1, '教师校正稿'), 'session');
+  assert.equal(createCorrectedDraftStore(root, page => `draft:${page}`).get(1), '教师校正稿');
+  draft.remove(1);
+  assert.equal(createCorrectedDraftStore(root, page => `draft:${page}`).get(1), null);
+});
+
+test('corrected draft stays in page memory if both browser stores reject it', () => {
+  const blocked = { getItem: () => null, setItem: () => { throw new Error('blocked'); }, removeItem: () => {} };
+  const draft = createCorrectedDraftStore({ localStorage: blocked, sessionStorage: blocked }, page => `draft:${page}`);
+  assert.equal(draft.set(1, '人工修改'), 'memory');
+  assert.equal(draft.get(1), '人工修改');
+});
 
 test('Gemini export preserves page headings and rejects missing recognition', () => {
   assert.equal(buildGeminiExport({ '1': 'ཀ\nཁ', '3': 'ག' }, [1, 3]), '第 1 页\nཀ\nཁ\n\n第 3 页\nག\n');

@@ -133,6 +133,39 @@
       .filter(page => mode !== 'remaining' || !String(pages?.[String(page)] || '').trim());
   }
 
+  function createCorrectedDraftStore(storageRoot, keyForPage) {
+    const memory = new Map();
+    const read = (storageName, key) => {
+      try { return storageRoot[storageName]?.getItem(key) ?? null; } catch { return null; }
+    };
+    return {
+      get(page) {
+        if (memory.has(page)) return memory.get(page);
+        const key = keyForPage(page);
+        const text = read('sessionStorage', key) ?? read('localStorage', key);
+        if (text !== null) memory.set(page, text);
+        return text;
+      },
+      set(page, text) {
+        memory.set(page, text);
+        const key = keyForPage(page);
+        try {
+          storageRoot.localStorage.setItem(key, text);
+          try { storageRoot.sessionStorage.removeItem(key); } catch { /* Local draft is saved. */ }
+          return 'local';
+        } catch { /* The origin's localStorage may be full or disabled. */ }
+        try { storageRoot.sessionStorage.setItem(key, text); return 'session'; }
+        catch { return 'memory'; }
+      },
+      remove(page) {
+        memory.delete(page);
+        const key = keyForPage(page);
+        try { storageRoot.localStorage.removeItem(key); } catch { /* Cloud copy is saved. */ }
+        try { storageRoot.sessionStorage.removeItem(key); } catch { /* Cloud copy is saved. */ }
+      },
+    };
+  }
+
   async function recognizeWithRetries(pages, recognize, options = {}) {
     const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const shouldStop = options.shouldStop || (() => false);
@@ -171,7 +204,7 @@
     return normalizeRotation(defaultPreviewRotation(bookId, sourceName, pageCount, page) + documentRotation + pageRotation);
   }
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { diffSegments, candidateSegments, hasAnyModelText, normalizeModelOrder, parsePageTextFile, prepareGeminiImportPages, buildCorrectedExport, buildGeminiExport, pagesForRecognition, createCorrectedDraftStore, recognizeWithRetries, normalizeRotation, defaultPreviewRotation, effectivePreviewRotation };
   if (!root.document) return;
 
   const $ = id => root.document.getElementById(id);
@@ -181,6 +214,7 @@
   const state = { page: Math.max(1, Number(params.get('page')) || 1), count: 0, sourceName: '', documentRotation: 0, pageRotations: {}, pages: {}, pageModels: {}, pageSources: {}, openaiPageModels: {}, openaiModel: '', openaiConfigured: false, baselineKey: 'teacher', dirty: false, saving: false, exporting: false, recognizing: false, batchRecognizing: false, batchProvider: '', batchStop: false, pageRequest: 0 };
   const endpoint = path => `/api/books/${encodeURIComponent(bookId)}${path}`;
   const draftKey = page => `whole-page-proofread-draft:${bookId}:${page}`;
+  const correctedDrafts = createCorrectedDraftStore(root, draftKey);
   const pendingGeminiKey = page => `whole-page-gemini-unsaved:${bookId}:${page}`;
   const pendingGemini = new Map();
   const rotationKey = scope => {
@@ -353,9 +387,7 @@
     const result = await requestJson(endpoint(`/whole-page-proofread/${page}`));
     if (token !== state.pageRequest) return;
     let text = result.saved ? result.text : (state.pages.gemini4?.[String(page)] || '');
-    let draft = null;
-    try { draft = root.localStorage.getItem(draftKey(page)); }
-    catch { /* Cloud copy remains available when local storage is blocked. */ }
+    const draft = correctedDrafts.get(page);
     if (draft !== null) { text = draft; state.dirty = true; feedback(`第 ${page} 页有尚未同步的本机草稿，请检查后保存。`, true); }
     else { state.dirty = false; feedback(result.saved ? `第 ${page} 页正确版已从云端读取。` : `第 ${page} 页正确版以 Gemini 4 为起点，修改后保存。`); }
     $('correctedText').value = text;
@@ -643,12 +675,12 @@
       await requestJson(endpoint(`/whole-page-proofread/${page}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }),
       });
-      try { root.localStorage.removeItem(draftKey(page)); } catch { /* Server save succeeded. */ }
+      correctedDrafts.remove(page);
       state.dirty = false;
       feedback(`第 ${page} 页正确版已保存到云端。`);
       return true;
     } catch (error) {
-      feedback(`第 ${page} 页云端保存失败：${error.message}；本机草稿仍在。`, true);
+      feedback(`第 ${page} 页云端保存失败：${error.message}；当前页面文字未清除，请重试保存，离开前先复制备份。`, true);
       return false;
     } finally { state.saving = false; $('correctedText').readOnly = false; $('saveCorrected').disabled = !state.dirty; }
   }
@@ -845,13 +877,13 @@
   });
   $('correctedText').addEventListener('input', () => {
     state.dirty = true;
-    let draftStored = true;
-    try { root.localStorage.setItem(draftKey(state.page), $('correctedText').value); }
-    catch { draftStored = false; }
+    const draftLocation = correctedDrafts.set(state.page, $('correctedText').value);
     $('saveCorrected').disabled = false;
-    feedback(draftStored
+    feedback(draftLocation === 'local'
       ? `第 ${state.page} 页有未同步修改；点击“保存正确版”或翻页时自动保存。`
-      : '本机草稿保存失败；请立即点击“保存正确版”。', !draftStored);
+      : draftLocation === 'session'
+        ? `浏览器长期存储已满；第 ${state.page} 页草稿暂存在当前标签页。请点击“保存正确版”同步云端。`
+        : `浏览器临时存储也不可用；第 ${state.page} 页文字仅在当前页面。请立即保存云端或复制备份。`, draftLocation === 'memory');
   });
   $('sourceImport').addEventListener('change', async event => {
     const file = event.target.files?.[0];
