@@ -25,13 +25,17 @@ test('selected model is the only unmarked baseline and missing baselines do not 
 });
 
 test('saved card order keeps each model once and restores omitted models', () => {
-  assert.deepEqual(normalizeModelOrder(['yigdzin1', 'teacher', 'teacher', 'unknown']), ['yigdzin1', 'teacher', 'gemini4', 'openai']);
-  assert.deepEqual(normalizeModelOrder(null), ['teacher', 'gemini4', 'yigdzin1', 'openai']);
+  assert.deepEqual(normalizeModelOrder(['yigdzin1', 'teacher', 'teacher', 'unknown']), ['yigdzin1', 'teacher', 'gemini4', 'gemini_import', 'openai']);
+  assert.deepEqual(normalizeModelOrder(['teacher', 'gemini4', 'yigdzin1', 'openai']), ['teacher', 'gemini4', 'gemini_import', 'yigdzin1', 'openai']);
+  assert.deepEqual(normalizeModelOrder(null), ['teacher', 'gemini4', 'gemini_import', 'yigdzin1', 'openai']);
 });
 
 test('teacher card is first and Gemini result shows a per-page source', () => {
   const html = readFileSync(join(__dirname, '../whole-page-proofread.html'), 'utf8');
   assert.ok(html.indexOf('id="teacherPanel"') < html.indexOf('id="gemini4Panel"'));
+  assert.ok(html.indexOf('id="gemini4Panel"') < html.indexOf('id="gemini_importPanel"'));
+  assert.match(html, /id="gemini_importImport"/);
+  assert.doesNotMatch(html.slice(html.indexOf('id="gemini4Panel"'), html.indexOf('id="gemini_importPanel"')), /type="file"/);
   assert.match(html, /id="geminiResultSource"/);
   assert.match(html, /全书差异基准：教师校正稿/);
 });

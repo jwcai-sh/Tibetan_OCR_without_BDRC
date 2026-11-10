@@ -47,7 +47,7 @@
     <link rel="stylesheet" href="./styles.css?v=20261102-cloud-library-delete" onerror="window.__tibetanWorkbenchBootFailure()" />
     <script src="./vendor/pdf.min.js" defer></script>
     <script src="./vendor/lucide.min.js" defer></script>
-    <script src="./app.js?v=20261102-cloud-library-delete" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
+    <script src="./app.js?v=20261110-gemini-txt-card" defer onerror="window.__tibetanWorkbenchBootFailure()"></script>
     <script src="./tb-translation-entry.js?v=20261101-tb-default" defer></script>
   </head>
   <body>
@@ -412,15 +412,15 @@
             <span id="collabFeedback" role="status"></span>
           </section>
 
-          <section id="gemini4Panel" class="gemini4-panel" hidden aria-label="Gemini 4 逐页识别结果">
+          <section id="gemini4Panel" class="gemini4-panel" hidden aria-label="Gemini TXT 导入结果">
             <div class="gemini4-heading">
-              <strong>Gemini 4 · 第 <span id="gemini4PageNumber">1</span> 页</strong>
+              <strong>Gemini TXT 导入 · 第 <span id="gemini4PageNumber">1</span> 页</strong>
               <a id="wholePageProofreadLink" href="./whole-page-proofread.html">整页校对 →</a>
               <button id="gemini4ImportButton" class="ghost-button compact" type="button">导入 24 页 TXT</button>
               <input id="gemini4ImportInput" type="file" accept=".txt,text/plain" hidden />
             </div>
             <div id="gemini4Feedback" class="review-feedback" role="status" aria-live="polite"></div>
-          <details id="gemini4Details"><summary>查看 Gemini 4 原文</summary><pre id="gemini4Text"></pre></details>
+          <details id="gemini4Details"><summary>查看导入的 Gemini TXT</summary><pre id="gemini4Text"></pre></details>
           </section>
 
           <div id="ocrLineCompare" class="ocr-line-compare" aria-label="Gemini OCR 逐行校对"></div>

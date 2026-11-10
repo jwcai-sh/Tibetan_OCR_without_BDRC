@@ -1,8 +1,8 @@
 (function (root) {
   'use strict';
 
-  const MODEL_KEYS = ['teacher', 'gemini4', 'yigdzin1', 'openai'];
-  const MODEL_LABELS = { gemini4: 'Gemini 4', openai: 'GPT（OpenAI API）', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
+  const MODEL_KEYS = ['teacher', 'gemini4', 'gemini_import', 'yigdzin1', 'openai'];
+  const MODEL_LABELS = { gemini4: 'Gemini 在线识别', gemini_import: 'Gemini TXT 导入', openai: 'GPT（OpenAI API）', teacher: '教师校正稿', yigdzin1: 'Yigdzin1' };
 
   function parsePageTextFile(source, pageCount) {
     const text = String(source || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
@@ -124,6 +124,7 @@
 
   function normalizeModelOrder(order) {
     const known = Array.isArray(order) ? order.filter((key, index) => MODEL_KEYS.includes(key) && order.indexOf(key) === index) : [];
+    if (known.includes('gemini4') && !known.includes('gemini_import')) known.splice(known.indexOf('gemini4') + 1, 0, 'gemini_import');
     return [...known, ...MODEL_KEYS.filter(key => !known.includes(key))];
   }
 
@@ -273,7 +274,7 @@
   }
 
   function modelLabel(key) {
-    if (key === 'gemini4') return geminiLabel();
+    if (key === 'gemini4') return `${geminiLabel()} · 在线识别`;
     if (key === 'openai') return `GPT（${String(state.openaiPageModels[String(state.page)] || state.openaiModel || 'OpenAI API').replace(/^openai:/, '')}）`;
     return MODEL_LABELS[key];
   }
@@ -302,9 +303,9 @@
     if (key === 'gemini4') {
       const source = state.pageSources[String(state.page)];
       $('geminiResultSource').textContent = !text ? '本页无结果' : source === 'api_recognition'
-        ? '本页来源：工作台 API 识别' : source === 'txt_import'
-          ? '本页来源：上传的 TXT' : '本页来源：旧结果未记录';
+        ? '本页来源：工作台 API 识别' : '本页来源：旧结果未记录';
     }
+    if (key === 'gemini_import') $('geminiImportSource').textContent = text ? '本页来源：上传的 TXT' : '本页无导入结果';
     panel.querySelector('.fill-corrected').disabled = !text;
     baselineButton.disabled = !hasAnyModelText(state.pages, key);
     if (!text) {
@@ -608,14 +609,14 @@
   }
 
   async function importModel(key, file) {
-    const importNotice = key === 'gemini4' ? $('geminiRecognitionFeedback') : null;
+    const importNotice = key === 'gemini_import' ? $('geminiImportFeedback') : null;
     if (importNotice) importNotice.textContent = '';
     try {
       if (!bookId || !state.count) throw new Error('请先导入 PDF 项目');
       const sourceText = await file.text();
       const hasPageHeadings = /^[^\n]*?第[ \t]*[0-9０-９]+[ \t]*页[^\n]*$/m.test(sourceText);
       const parsedPages = parsePageTextFile(sourceText, state.count);
-      const { pages, emptyPages } = key === 'gemini4'
+      const { pages, emptyPages } = key === 'gemini_import'
         ? prepareGeminiImportPages(parsedPages) : { pages: parsedPages, emptyPages: [] };
       if (!hasPageHeadings && !root.confirm(`此 TXT 没有“第…页”页标，已按 ${Object.keys(pages).length} 个自然分段依次对应当前 PDF 的第 1–${state.count} 页。请确认是同一本书；继续将覆盖这些页现有的 ${MODEL_LABELS[key]} 内容。`)) {
         feedback(`${MODEL_LABELS[key]} 导入已取消。`);
@@ -626,17 +627,10 @@
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pages }),
       });
       state.pages[key] = { ...(state.pages[key] || {}), ...pages };
-      if (key === 'gemini4') {
-        for (const page of Object.keys(pages)) {
-          delete state.pageModels[page];
-          state.pageSources[page] = 'txt_import';
-        }
-      }
       if (key === state.baselineKey) renderAllCandidates();
       else renderCandidate(key);
       updateRecognitionControls();
       feedback(`${MODEL_LABELS[key]} 的 ${Object.keys(pages).length} 页已保存到云端${emptyPages.length ? `；空白第 ${emptyPages.join('、')} 页已跳过` : ''}。`);
-      if (key === 'gemini4') root.document.querySelector('.import-controls').open = false;
     } catch (error) {
       const message = `${MODEL_LABELS[key]} 导入失败：${error.message}`;
       if (importNotice) importNotice.textContent = message;
@@ -763,7 +757,7 @@
     event.target.value = '';
     if (file) await importSource(file);
   });
-  for (const key of MODEL_KEYS.filter(key => key !== 'openai')) {
+  for (const key of MODEL_KEYS.filter(key => key !== 'openai' && key !== 'gemini4')) {
     $(`${key}Import`).addEventListener('change', async event => {
       const file = event.target.files?.[0];
       event.target.value = '';

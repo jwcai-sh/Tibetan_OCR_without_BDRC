@@ -660,14 +660,38 @@ async def put_book_state(book_id: str, request: Request) -> dict[str, Any]:
 def get_gemini4_results(book_id: str) -> dict[str, Any]:
     read_json(book_id, "metadata.json")
     try:
-        return read_json(book_id, "model-results/gemini4.json")
+        result = read_json(book_id, "model-results/gemini4.json")
     except HTTPException as exc:
         if exc.status_code == 404:
             return {"model": "Gemini 4", "pages": {}}
         raise
+    imported = {page for page, source in (result.get("page_sources") or {}).items() if source == "txt_import"}
+    return {**result,
+            "pages": {page: text for page, text in (result.get("pages") or {}).items() if page not in imported},
+            "page_models": {page: model for page, model in (result.get("page_models") or {}).items() if page not in imported},
+            "page_sources": {page: source for page, source in (result.get("page_sources") or {}).items() if page not in imported}}
 
 
 gemini_result_lock = threading.Lock()
+
+
+def imported_gemini_results(book_id: str) -> dict[str, Any]:
+    try:
+        legacy = read_json(book_id, "model-results/gemini4.json")
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        legacy = {}
+    legacy_sources = legacy.get("page_sources") or {}
+    legacy_pages = {page: text for page, text in (legacy.get("pages") or {}).items()
+                    if legacy_sources.get(page) == "txt_import"}
+    try:
+        result = read_json(book_id, "model-results/gemini_import.json")
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        result = {"model": "Gemini TXT 导入", "pages": {}}
+    return {**result, "pages": {**legacy_pages, **(result.get("pages") or {})}}
 
 
 @app.put("/api/books/{book_id}/model-results/gemini4")
@@ -684,24 +708,20 @@ async def put_gemini4_results(book_id: str, request: Request) -> dict[str, Any]:
     if sum(len(text) for text in pages.values()) > 2_000_000:
         raise HTTPException(413, "Gemini 4 结果过大")
     with gemini_result_lock:
-        try:
-            result = read_json(book_id, "model-results/gemini4.json")
-        except HTTPException as exc:
-            if exc.status_code != 404:
-                raise
-            result = {"model": "Gemini 4", "pages": {}}
+        result = imported_gemini_results(book_id)
         saved_pages = dict(result.get("pages") or {})
-        page_models = dict(result.get("page_models") or {})
-        page_sources = dict(result.get("page_sources") or {})
         for page, text in pages.items():
             saved_pages[str(page)] = text.strip()
-            page_models.pop(str(page), None)
-            page_sources[str(page)] = "txt_import"
-        result.update({"pages": saved_pages, "page_models": page_models, "page_sources": page_sources,
+        result.update({"model": "Gemini TXT 导入", "pages": saved_pages,
                        "updated_at": datetime.now(timezone.utc).isoformat(),
                        "updated_by": collaboration.current_actor(request) if collaboration.configured() else "import"})
-        write_json(book_id, "model-results/gemini4.json", result)
+        write_json(book_id, "model-results/gemini_import.json", result)
     return {"ok": True, "page_count": len(pages), "updated_at": result["updated_at"]}
+
+
+@app.put("/api/books/{book_id}/model-results/gemini_import")
+async def put_gemini_import_results(book_id: str, request: Request) -> dict[str, Any]:
+    return await put_gemini4_results(book_id, request)
 
 
 @app.put("/api/books/{book_id}/model-results/gemini4/pages/{page_num}")
@@ -724,6 +744,9 @@ async def put_gemini_page_result(book_id: str, page_num: int, request: Request) 
             if exc.status_code != 404:
                 raise
             result = {"model": "Gemini 4", "pages": {}}
+        imported = imported_gemini_results(book_id)
+        if imported["pages"]:
+            write_json(book_id, "model-results/gemini_import.json", imported)
         pages = dict(result.get("pages") or {})
         page_models = dict(result.get("page_models") or {})
         page_sources = dict(result.get("page_sources") or {})
@@ -783,9 +806,11 @@ def whole_page_book_count(book_id: str) -> int:
 
 @app.get("/api/books/{book_id}/model-results/{model_key}")
 def get_whole_page_model_results(book_id: str, model_key: str) -> dict[str, Any]:
-    if model_key not in {"teacher", "yigdzin1", "openai"}:
+    if model_key not in {"teacher", "yigdzin1", "openai", "gemini_import"}:
         raise HTTPException(404, "未知整页候选")
     read_json(book_id, "metadata.json")
+    if model_key == "gemini_import":
+        return imported_gemini_results(book_id)
     try:
         return read_json(book_id, f"model-results/{model_key}.json")
     except HTTPException as exc:

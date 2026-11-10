@@ -3658,7 +3658,7 @@ function renderGemini4Page() {
 
 async function loadGemini4Pages(bookId) {
   try {
-    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini4`, {credentials: "same-origin"});
+    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini_import`, {credentials: "same-origin"});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
     if (state.remoteBookId !== bookId) return;
@@ -3666,7 +3666,7 @@ async function loadGemini4Pages(bookId) {
     els.gemini4Feedback.textContent = Object.keys(state.gemini4Pages).length ? `云端已保存 ${Object.keys(state.gemini4Pages).length} 页` : "尚未导入";
     renderGemini4Page();
   } catch (error) {
-    if (state.remoteBookId === bookId) els.gemini4Feedback.textContent = `Gemini 4 云端结果读取失败：${error.message}`;
+    if (state.remoteBookId === bookId) els.gemini4Feedback.textContent = `Gemini TXT 云端结果读取失败：${error.message}`;
   }
 }
 
@@ -3680,7 +3680,7 @@ async function importGemini4File(file) {
   try {
     const pages = parseGemini4Pages(await file.text(), state.pageCount);
     els.gemini4Feedback.textContent = `正在上传 ${state.pageCount} 页到云端…`;
-    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini4`, {
+    const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/model-results/gemini_import`, {
       method: "PUT", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify({pages}),
     });
     const payload = await response.json().catch(() => ({}));

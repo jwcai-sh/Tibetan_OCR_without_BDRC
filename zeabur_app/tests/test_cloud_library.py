@@ -274,15 +274,17 @@ class CloudLibraryTest(unittest.TestCase):
         response = self.client.put(endpoint, json={"pages": {"1": "བོད་"}})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["page_count"], 1)
-        saved = self.client.get(endpoint).json()
-        self.assertEqual(saved["pages"], {"1": "བོད་", "2": "API 结果"})
-        self.assertEqual(saved["page_models"], {"2": "gemini:old"})
-        self.assertEqual(saved["page_sources"], {"1": "txt_import", "2": "api_recognition"})
+        saved = self.client.get(f"/api/books/{book_id}/model-results/gemini_import").json()
+        self.assertEqual(saved["pages"], {"1": "བོད་"})
+        online = self.client.get(endpoint).json()
+        self.assertEqual(online["pages"], {"1": "旧一页", "2": "API 结果"})
+        self.assertEqual(online["page_models"], {"1": "gemini:old", "2": "gemini:old"})
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "人工校对")
         full_import = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
         self.assertEqual(full_import.status_code, 200)
         self.assertEqual(full_import.json()["page_count"], 2)
-        self.assertEqual(self.client.get(endpoint).json()["page_sources"], {"1": "txt_import", "2": "txt_import"})
+        self.assertEqual(self.client.get(f"/api/books/{book_id}/model-results/gemini_import").json()["pages"], {"1": "བོད་", "2": "ཡིག་"})
+        self.assertEqual(self.client.get(endpoint).json()["pages"], {"1": "旧一页", "2": "API 结果"})
 
     def test_gemini4_import_uses_pdf_pages_when_book_state_count_is_zero(self):
         document = fitz.open()
@@ -298,7 +300,19 @@ class CloudLibraryTest(unittest.TestCase):
             response = self.client.put(endpoint, json={"pages": {"1": "བོད་", "2": "ཡིག་"}})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["page_count"], 2)
-        self.assertEqual(self.client.get(endpoint).json()["page_sources"], {"1": "txt_import", "2": "txt_import"})
+        self.assertEqual(self.client.get(f"/api/books/{book_id}/model-results/gemini_import").json()["pages"], {"1": "བོད་", "2": "ཡིག་"})
+
+    def test_legacy_gemini_txt_and_online_results_appear_in_separate_candidates(self):
+        book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
+        book_id = book["book_id"]
+        main.write_json(book_id, "state.json", {"page_count": 2})
+        main.write_json(book_id, "model-results/gemini4.json", {"model": "Gemini 4", "pages": {"1": "旧 TXT", "2": "在线识别"}, "page_models": {"2": "gemini:test"}, "page_sources": {"1": "txt_import", "2": "api_recognition"}})
+        base = f"/api/books/{book_id}/model-results"
+        self.assertEqual(self.client.get(f"{base}/gemini4").json()["pages"], {"2": "在线识别"})
+        self.assertEqual(self.client.get(f"{base}/gemini_import").json()["pages"], {"1": "旧 TXT"})
+        self.assertEqual(self.client.put(f"{base}/gemini_import", json={"pages": {"2": "新 TXT"}}).status_code, 200)
+        self.assertEqual(self.client.get(f"{base}/gemini_import").json()["pages"], {"1": "旧 TXT", "2": "新 TXT"})
+        self.assertEqual(self.client.get(f"{base}/gemini4").json()["pages"], {"2": "在线识别"})
 
     def test_whole_page_candidates_and_corrected_page_are_isolated(self):
         book = self.client.post("/api/library/open", headers={"Authorization": "Bearer test-library-password"}, json={"path": "经书/第一册.pdf"}).json()
@@ -327,9 +341,11 @@ class CloudLibraryTest(unittest.TestCase):
             result = self.client.put(endpoint, json={"text": "བོད་", "model": "gemini:gemini-3.8-flash"})
         self.assertEqual(result.status_code, 200, result.text)
         saved = self.client.get(f"/api/books/{book_id}/model-results/gemini4").json()
-        self.assertEqual(saved["pages"], {"1": "བོད་", "2": "旧二页"})
+        self.assertEqual(saved["pages"], {"1": "བོད་"})
         self.assertEqual(saved["page_models"]["1"], "gemini:gemini-3.8-flash")
-        self.assertEqual(saved["page_sources"], {"1": "api_recognition", "2": "txt_import"})
+        self.assertEqual(saved["page_sources"], {"1": "api_recognition"})
+        imported = self.client.get(f"/api/books/{book_id}/model-results/gemini_import").json()
+        self.assertEqual(imported["pages"], {"1": "旧一页", "2": "旧二页"})
         self.assertEqual(result.json()["source"], "api_recognition")
         self.assertEqual(main.read_json(book_id, "state.json")["ocr_results"]["1"]["text"], "原校对")
 
